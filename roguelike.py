@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Simple terminal roguelike using curses."""
 
+import collections
 import copy
 import curses
+import heapq
 import random
 
 MAP_W   = 80
@@ -10,7 +12,8 @@ MAP_H   = 40
 WALL    = '#'
 FLOOR   = '.'
 PLAYER  = '@'
-PANEL_W = 20  # width of the right-hand stats panel (including border)
+PANEL_W   = 20  # width of the right-hand stats panel (including border)
+LOG_LINES = 4   # number of message log rows at the bottom
 
 
 class Room:
@@ -27,27 +30,43 @@ class Room:
 
 
 class Item:
-    def __init__(self, name, slot, atk=0, dfn=0, char='!'):
-        self.name = name   # display name
-        self.slot = slot   # 'weapon' or 'armor'
-        self.atk  = atk
-        self.dfn  = dfn
-        self.char = char   # glyph on map
+    def __init__(self, name, slot, atk=0, dfn=0, char='!', consumable=False, heal=0, ranged=False):
+        self.name       = name   # display name
+        self.slot       = slot   # 'weapon', 'armor', or 'use'
+        self.atk        = atk
+        self.dfn        = dfn
+        self.char       = char   # glyph on map
+        self.consumable = consumable
+        self.heal       = heal
+        self.ranged     = ranged
 
     def stat_str(self):
+        if self.consumable:
+            return f'Heals {self.heal} HP' if self.heal else ''
         parts = []
         if self.atk: parts.append(f'+{self.atk} ATK')
         if self.dfn: parts.append(f'+{self.dfn} DEF')
+        if self.ranged: parts.append('[ranged]')
         return '  '.join(parts)
+
+    def use(self, player):
+        if self.heal:
+            restored = min(self.heal, player.max_hp - player.hp)
+            player.hp = min(player.max_hp, player.hp + self.heal)
+            return f"Used {self.name}: +{restored} HP."
+        return f"Used {self.name}."
 
 
 ITEM_TEMPLATES = [
     Item('Vibro-Knife',    'weapon', atk=1, char='/'),
-    Item('Pulse Pistol',   'weapon', atk=3, char='/'),
-    Item('Arc Rifle',      'weapon', atk=5, char='/'),
+    Item('Pulse Pistol',   'weapon', atk=3, char='/', ranged=True),
+    Item('Arc Rifle',      'weapon', atk=5, char='/', ranged=True),
     Item('Ballistic Weave','armor',  dfn=1, char=']'),
     Item('Combat Exosuit', 'armor',  dfn=3, char=']'),
     Item('Aegis Plate',    'armor',  dfn=5, char=']'),
+    Item('Med-Patch',      'use',    char='+', consumable=True, heal=10),
+    Item('Medkit',         'use',    char='+', consumable=True, heal=25),
+    Item('Nano-Inject',    'use',    char='+', consumable=True, heal=15),
 ]
 
 STATS            = ('body', 'reflex', 'mind', 'tech', 'presence')
@@ -117,11 +136,14 @@ class Player:
 
     def gain_xp(self, amount):
         self.xp += amount
+        leveled = False
         while self.xp >= self.xp_next:
-            self.xp -= self.xp_next
-            self.level  += 1
+            self.xp    -= self.xp_next
+            self.level += 1
             self.max_hp += 5
-            self.hp      = self.max_hp  # full heal on level-up
+            self.hp     = self.max_hp
+            leveled = True
+        return f"Level up! You are now level {self.level}. Full HP restored." if leveled else None
 
     def pickup(self, item):
         self.inventory.append(item)
@@ -245,6 +267,53 @@ def make_floor(floor_num):
 FOV_RADIUS = 8
 
 
+def find_path(tiles, start, goal, blocked):
+    """A* on the floor grid. blocked: set of (x,y) that cannot be entered.
+    goal is always reachable even if in blocked (so enemies can attack the player).
+    Returns a list of (x,y) steps not including start, or [] if unreachable."""
+    if start == goal:
+        return []
+
+    def h(pos):
+        return abs(pos[0] - goal[0]) + abs(pos[1] - goal[1])
+
+    open_heap = [(h(start), 0, start)]
+    came_from = {start: None}
+    g_score   = {start: 0}
+
+    while open_heap:
+        _, g, pos = heapq.heappop(open_heap)
+
+        if pos == goal:
+            path, cur = [], pos
+            while cur != start:
+                path.append(cur)
+                cur = came_from[cur]
+            path.reverse()
+            return path
+
+        if g > g_score.get(pos, float('inf')):
+            continue
+
+        x, y = pos
+        for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nx, ny = x + dx, y + dy
+            npos   = (nx, ny)
+            if not (0 <= nx < MAP_W and 0 <= ny < MAP_H):
+                continue
+            if tiles[ny][nx] != FLOOR:
+                continue
+            if npos in blocked and npos != goal:
+                continue
+            ng = g + 1
+            if ng < g_score.get(npos, float('inf')):
+                g_score[npos]   = ng
+                came_from[npos] = pos
+                heapq.heappush(open_heap, (ng + h(npos), ng, npos))
+
+    return []
+
+
 def _bresenham(x0, y0, x1, y1):
     """Yield each integer (x, y) on the line from (x0, y0) to (x1, y1)."""
     dx, dy = abs(x1 - x0), abs(y1 - y0)
@@ -293,6 +362,7 @@ COLOR_DARK   = 6  # explored but not currently visible
 COLOR_ITEM   = 7  # items on the map (green)
 COLOR_STAIR  = 8  # stairs (magenta)
 COLOR_ENEMY  = 9  # red — hostile units
+COLOR_TARGET = 10 # yellow bold — targeting reticle
 
 
 def setup_colors():
@@ -307,6 +377,7 @@ def setup_colors():
     curses.init_pair(COLOR_ITEM,   curses.COLOR_GREEN,   -1)
     curses.init_pair(COLOR_STAIR,  curses.COLOR_MAGENTA, -1)
     curses.init_pair(COLOR_ENEMY,  curses.COLOR_RED,     -1)
+    curses.init_pair(COLOR_TARGET, curses.COLOR_YELLOW,  -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -352,9 +423,10 @@ def draw_panel(stdscr, player, col, rows, current_floor):
 
 
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-         stair_up, stair_down, current_floor, enemies=None, msg=''):
+         stair_up, stair_down, current_floor, enemies=None, log=None,
+         target_line=None, target_pos=None):
     term_h, term_w = stdscr.getmaxyx()
-    view_h  = term_h - 2              # reserve two rows for the status bar
+    view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
 
     # Center camera on player, clamped to map bounds
@@ -410,6 +482,15 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                     ch   = tiles[my][mx]
                     attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
 
+            # Targeting overlay — drawn on top of everything else
+            if target_line and (mx, my) in visible:
+                if (mx, my) == target_pos:
+                    ch   = 'X'
+                    attr = curses.color_pair(COLOR_TARGET) | curses.A_BOLD
+                elif (mx, my) in target_line and tiles[my][mx] == FLOOR:
+                    ch   = '~'
+                    attr = curses.color_pair(COLOR_STAIR)
+
             try:
                 stdscr.addch(sy, sx, ch, attr)
             except curses.error:
@@ -419,15 +500,30 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
     panel_col = term_w - PANEL_W
     draw_panel(stdscr, player, panel_col, view_h, current_floor)
 
-    # --- Status bar ---
-    status_text = msg if msg else " WASD/Arrows:move  >/< stairs  I:equip  R:reset  Q:quit"
-    divider = curses.ACS_HLINE
+    # --- Message log ---
+    HINT = " WASD/Arrows:move  F:fire  >/< stairs  I:equip  U:use  R:reset  Q:quit"
+    divider_row = term_h - LOG_LINES - 1
+    log_entries = list(log) if log else []   # index 0 = newest
+
     try:
         for sx in range(term_w - 1):
-            stdscr.addch(term_h - 2, sx, divider)
-        stdscr.addstr(term_h - 1, 0, status_text[: term_w - 1])
+            stdscr.addch(divider_row, sx, curses.ACS_HLINE)
     except curses.error:
         pass
+
+    for i in range(LOG_LINES):
+        row = term_h - LOG_LINES + i
+        if i == 0 and not log_entries:
+            text, attr = HINT, 0
+        elif i < len(log_entries):
+            text = log_entries[i]
+            attr = curses.A_BOLD if i == 0 else (0 if i == 1 else curses.A_DIM)
+        else:
+            text, attr = '', 0
+        try:
+            stdscr.addstr(row, 0, text[: term_w - 1], attr)
+        except curses.error:
+            pass
 
     stdscr.refresh()
 
@@ -451,7 +547,10 @@ def show_equipment_screen(stdscr, player):
                 entries.append(None)  # not selectable
 
         for item in player.inventory:
-            entries.append(('equip', item))
+            if item.consumable:
+                entries.append(('use', item))
+            else:
+                entries.append(('equip', item))
 
         # Flatten: section headers are non-selectable, item rows are selectable
         # We track which flat row index corresponds to which entry index
@@ -558,7 +657,7 @@ def show_equipment_screen(stdscr, player):
 
         if key in (27, ord('i'), ord('I')):          # Esc or I to close
             show_equipment_screen._cursor = cur_sel
-            break
+            return ''
 
         if key in (curses.KEY_UP, ord('w'), ord('W')):
             if selectable_rows:
@@ -578,10 +677,62 @@ def show_equipment_screen(stdscr, player):
                     action, payload = entries[eidx]
                     if action == 'equip':
                         player.equip(payload)
+                        show_equipment_screen._cursor = 0
                     elif action == 'unequip':
                         player.unequip(payload)
-                    # Reset cursor safely after inventory change
-                    show_equipment_screen._cursor = 0
+                    elif action == 'use':
+                        result = payload.use(player)
+                        player.inventory.remove(payload)
+                        show_equipment_screen._cursor = 0
+                        return result
+
+
+def show_targeting(stdscr, tiles, px, py, player, visible, explored,
+                   items_on_map, stair_up, stair_down, current_floor,
+                   enemies_on_map, log):
+    """Targeting cursor for ranged attack.
+    Tab cycles targets. Enter fires. Esc/F cancels.
+    Returns (target_pos, enemy) or (None, None)."""
+    visible_enemies = sorted(
+        [(pos, e) for pos, e in enemies_on_map.items() if pos in visible],
+        key=lambda pe: abs(pe[0][0] - px) + abs(pe[0][1] - py),
+    )
+    if not visible_enemies:
+        return None, None
+
+    # Instruction shown as the newest log entry during targeting
+    hint_log = collections.deque(
+        ["TARGETING — Tab: next target   Enter: fire   Esc: cancel"],
+        maxlen=LOG_LINES,
+    )
+    hint_log.extend(log)
+
+    cur = 0
+    while True:
+        target_pos, target_enemy = visible_enemies[cur]
+        tx, ty = target_pos
+
+        # Trajectory from player to target — stop tracing at first wall
+        line_tiles = set()
+        for lx, ly in _bresenham(px, py, tx, ty):
+            if (lx, ly) == (px, py):
+                continue
+            line_tiles.add((lx, ly))
+            if tiles[ly][lx] == WALL:
+                break
+
+        draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+             stair_up, stair_down, current_floor, enemies_on_map, hint_log,
+             target_line=line_tiles, target_pos=target_pos)
+
+        key = stdscr.getch()
+
+        if key in (27, ord('f'), ord('F')):      # Esc or F — cancel
+            return None, None
+        if key == 9:                              # Tab — next target
+            cur = (cur + 1) % len(visible_enemies)
+        if key in (curses.KEY_ENTER, 10, 13):    # Enter — fire
+            return target_pos, target_enemy
 
 
 def show_character_creation(stdscr):
@@ -793,38 +944,46 @@ def show_character_creation(stdscr):
 
 def enemy_turn(enemies, tiles, px, py, visible, player):
     """Move and attack with every enemy. Returns list of combat message strings."""
-    msgs = []
-    for (ex, ey), enemy in list(enemies.items()):
-        if (ex, ey) in visible:
-            ddx = (1 if px > ex else -1) if px != ex else 0
-            ddy = (1 if py > ey else -1) if py != ey else 0
-            for ndx, ndy in [(ddx, ddy), (ddx, 0), (0, ddy)]:
-                if ndx == 0 and ndy == 0:
-                    continue
-                nx, ny = ex + ndx, ey + ndy
-                if (nx, ny) == (px, py):
+    msgs       = []
+    player_pos = (px, py)
+    # Track occupied positions so enemies don't pile onto the same tile this turn.
+    # Updated as enemies move so later enemies see the current layout.
+    occupied = set(enemies.keys())
+
+    for epos, enemy in list(enemies.items()):
+        ex, ey = epos
+        if epos in visible:
+            # A* toward the player; other enemies are obstacles (but not the goal)
+            blocked = occupied - {epos}
+            path    = find_path(tiles, epos, player_pos, blocked)
+            if path:
+                step = path[0]
+                if step == player_pos:
                     dmg = max(1, enemy.atk - player.dfn)
                     player.hp -= dmg
                     msgs.append(f"{enemy.name} hits you for {dmg}!")
-                    break
-                if (0 <= nx < MAP_W and 0 <= ny < MAP_H
-                        and tiles[ny][nx] == FLOOR
-                        and (nx, ny) not in enemies):
-                    enemies[(nx, ny)] = enemy
-                    del enemies[(ex, ey)]
-                    break
+                elif step not in occupied:
+                    occupied.discard(epos)
+                    occupied.add(step)
+                    enemies[step] = enemy
+                    del enemies[epos]
         else:
+            # Not in FOV — random walk
             dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
             random.shuffle(dirs)
             for ndx, ndy in dirs:
-                nx, ny = ex + ndx, ey + ndy
+                npos = (ex + ndx, ey + ndy)
+                nx, ny = npos
                 if (0 <= nx < MAP_W and 0 <= ny < MAP_H
                         and tiles[ny][nx] == FLOOR
-                        and (nx, ny) not in enemies
-                        and (nx, ny) != (px, py)):
-                    enemies[(nx, ny)] = enemy
-                    del enemies[(ex, ey)]
+                        and npos not in occupied
+                        and npos != player_pos):
+                    occupied.discard(epos)
+                    occupied.add(npos)
+                    enemies[npos] = enemy
+                    del enemies[epos]
                     break
+
     return msgs
 
 
@@ -884,21 +1043,33 @@ def main(stdscr):
     stair_up      = floor_data['stair_up']
     stair_down    = floor_data['stair_down']
     explored      = floor_data['explored']
-    msg      = ''
+    log      = collections.deque(maxlen=LOG_LINES)
     visible  = compute_fov(tiles, px, py)
     explored |= visible
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-         stair_up, stair_down, current_floor, enemies_on_map, msg)
+         stair_up, stair_down, current_floor, enemies_on_map, log)
 
     MOVE_KEYS = {
+        # Cardinal — WASD
         ord('w'):         ( 0, -1),
         ord('a'):         (-1,  0),
         ord('s'):         ( 0,  1),
         ord('d'):         ( 1,  0),
+        # Cardinal — arrow keys
         curses.KEY_UP:    ( 0, -1),
         curses.KEY_LEFT:  (-1,  0),
         curses.KEY_DOWN:  ( 0,  1),
         curses.KEY_RIGHT: ( 1,  0),
+        # Diagonal — numpad (numlock off: curses named constants)
+        curses.KEY_A1:    (-1, -1),   # numpad 7 (NW)
+        curses.KEY_A3:    ( 1, -1),   # numpad 9 (NE)
+        curses.KEY_C1:    (-1,  1),   # numpad 1 (SW)
+        curses.KEY_C3:    ( 1,  1),   # numpad 3 (SE)
+        # Diagonal — numpad (numlock on: sends plain digits)
+        ord('7'):         (-1, -1),
+        ord('9'):         ( 1, -1),
+        ord('1'):         (-1,  1),
+        ord('3'):         ( 1,  1),
     }
 
     while True:
@@ -919,37 +1090,91 @@ def main(stdscr):
             stair_up       = floor_data['stair_up']
             stair_down     = floor_data['stair_down']
             explored       = floor_data['explored']
-            msg            = ''
+            log            = collections.deque(maxlen=LOG_LINES)
 
         if key in (ord('i'), ord('I')):
-            show_equipment_screen(stdscr, player)
+            result = show_equipment_screen(stdscr, player)
+            if result:
+                log.appendleft(result)
+
+        if key in (ord('u'), ord('U')):
+            consumables = [i for i in player.inventory if i.consumable]
+            if consumables:
+                item = consumables[0]
+                log.appendleft(item.use(player))
+                player.inventory.remove(item)
+            else:
+                log.appendleft("No consumables in inventory.")
+
+        if key in (ord('f'), ord('F')):
+            weapon = player.equipment.get('weapon')
+            if not weapon or not weapon.ranged:
+                log.appendleft("No ranged weapon equipped.")
+            else:
+                target_pos, _ = show_targeting(
+                    stdscr, tiles, px, py, player, visible, explored,
+                    items_on_map, stair_up, stair_down, current_floor,
+                    enemies_on_map, log)
+                if target_pos is not None:
+                    # Trace from player toward target; hit first enemy in path
+                    tx, ty  = target_pos
+                    hit_pos = None
+                    for lx, ly in _bresenham(px, py, tx, ty):
+                        if (lx, ly) == (px, py):
+                            continue
+                        if tiles[ly][lx] == WALL:
+                            break
+                        if (lx, ly) in enemies_on_map:
+                            hit_pos = (lx, ly)
+                            break
+
+                    if hit_pos:
+                        enemy = enemies_on_map[hit_pos]
+                        dmg   = max(1, player.atk - enemy.dfn)
+                        enemy.hp -= dmg
+                        if enemy.hp <= 0:
+                            del enemies_on_map[hit_pos]
+                            lvl_msg = player.gain_xp(enemy.xp_reward)
+                            log.appendleft(
+                                f"You shoot {enemy.name} for {dmg}. "
+                                f"{enemy.name} destroyed! +{enemy.xp_reward} XP")
+                            if lvl_msg:
+                                log.appendleft(lvl_msg)
+                        else:
+                            log.appendleft(f"You shoot {enemy.name} for {dmg}.")
+                    else:
+                        log.appendleft("The shot goes wide.")
+
+                    # Firing costs a turn
+                    e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                    for em in e_msgs:
+                        log.appendleft(em)
 
         if key in MOVE_KEYS:
             dx, dy = MOVE_KEYS[key]
             nx, ny = px + dx, py + dy
             if (nx, ny) in enemies_on_map:
-                # Bump attack
                 enemy = enemies_on_map[(nx, ny)]
                 dmg = max(1, player.atk - enemy.dfn)
                 enemy.hp -= dmg
-                msg = f"You hit {enemy.name} for {dmg}."
                 if enemy.hp <= 0:
                     del enemies_on_map[(nx, ny)]
-                    player.gain_xp(enemy.xp_reward)
-                    msg += f" {enemy.name} destroyed! +{enemy.xp_reward} XP"
+                    lvl_msg = player.gain_xp(enemy.xp_reward)
+                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP")
+                    if lvl_msg:
+                        log.appendleft(lvl_msg)
                 else:
                     edm = max(1, enemy.atk - player.dfn)
                     player.hp -= edm
-                    msg += f" {enemy.name} hits back for {edm}."
+                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} hits back for {edm}.")
             elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
                 px, py = nx, ny
                 player.gain_xp(1)
-                # Auto-pickup item on tile
                 if (px, py) in items_on_map:
-                    player.pickup(items_on_map.pop((px, py)))
-                msg = ''
+                    picked = items_on_map.pop((px, py))
+                    player.pickup(picked)
+                    log.appendleft(f"Picked up {picked.name}.")
 
-                # Stair traversal
                 if (px, py) == stair_down:
                     current_floor += 1
                     if current_floor not in floors:
@@ -962,6 +1187,7 @@ def main(stdscr):
                     stair_up       = floor_data['stair_up']
                     stair_down     = floor_data['stair_down']
                     explored       = floor_data['explored']
+                    log.appendleft(f"You descend to floor {current_floor}.")
                 elif stair_up and (px, py) == stair_up:
                     current_floor -= 1
                     floor_data     = floors[current_floor]
@@ -972,12 +1198,11 @@ def main(stdscr):
                     stair_up       = floor_data['stair_up']
                     stair_down     = floor_data['stair_down']
                     explored       = floor_data['explored']
+                    log.appendleft(f"You ascend to floor {current_floor}.")
 
-            # Enemy turn after any player action
             e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
-            if e_msgs:
-                suffix = '  ' + ' '.join(e_msgs)
-                msg = (msg + suffix).strip() if msg else ' '.join(e_msgs)
+            for em in e_msgs:
+                log.appendleft(em)
 
         visible   = compute_fov(tiles, px, py)
         explored |= visible
@@ -986,7 +1211,7 @@ def main(stdscr):
         if player.hp <= 0:
             player.hp = 0
             draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-                 stair_up, stair_down, current_floor, enemies_on_map, msg)
+                 stair_up, stair_down, current_floor, enemies_on_map, log)
             if show_game_over(stdscr, player, current_floor):
                 player         = show_character_creation(stdscr)
                 current_floor  = 1
@@ -1000,14 +1225,14 @@ def main(stdscr):
                 stair_up       = floor_data['stair_up']
                 stair_down     = floor_data['stair_down']
                 explored       = floor_data['explored']
-                msg            = ''
+                log            = collections.deque(maxlen=LOG_LINES)
                 visible        = compute_fov(tiles, px, py)
                 explored      |= visible
             else:
                 break
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-             stair_up, stair_down, current_floor, enemies_on_map, msg)
+             stair_up, stair_down, current_floor, enemies_on_map, log)
 
 
 if __name__ == '__main__':
