@@ -14,6 +14,7 @@ FLOOR   = '.'
 PLAYER  = '@'
 PANEL_W   = 20  # width of the right-hand stats panel (including border)
 LOG_LINES = 4   # number of message log rows at the bottom
+MAX_FLOOR = 10  # final floor; win condition triggers here
 
 
 class Room:
@@ -416,7 +417,7 @@ class Player:
 
 
 class Enemy:
-    def __init__(self, name, char, hp, atk, dfn, xp_reward):
+    def __init__(self, name, char, hp, atk, dfn, xp_reward, boss=False):
         self.name      = name
         self.char      = char
         self.hp        = hp
@@ -424,6 +425,7 @@ class Enemy:
         self.atk       = atk
         self.dfn       = dfn
         self.xp_reward = xp_reward
+        self.boss      = boss
 
 
 ENEMY_TEMPLATES = [
@@ -433,14 +435,47 @@ ENEMY_TEMPLATES = [
 ]
 
 
-def scatter_enemies(tiles, floor_num, n, exclude=()):
+# Floor themes: keyed by (min_floor, max_floor)
+# enemy_weights: [Drone, Sentry, Stalker] relative probabilities
+THEME_DATA = {
+    (1,  3):  {'name': 'Operations Deck',
+               'wall_cp': COLOR_WALL,
+               'msg': None,
+               'weights': [5, 3, 1],
+               'gen': {'max_rooms': 30, 'min_rw': 5, 'max_rw': 12, 'min_rh': 4, 'max_rh': 9}},
+    (4,  6):  {'name': 'Research Wing',
+               'wall_cp': COLOR_WALL_2,
+               'msg': "Emergency lighting only. The station is badly damaged.",
+               'weights': [2, 5, 2],
+               'gen': {'max_rooms': 25, 'min_rw': 4, 'max_rw': 10, 'min_rh': 3, 'max_rh': 8}},
+    (7,  9):  {'name': 'Sublevel Core',
+               'wall_cp': COLOR_WALL_3,
+               'msg': "The signal is overwhelming. Something is very wrong here.",
+               'weights': [1, 2, 6],
+               'gen': {'max_rooms': 20, 'min_rw': 3, 'max_rw': 9, 'min_rh': 3, 'max_rh': 7}},
+    (10, 10): {'name': 'Signal Source',
+               'wall_cp': COLOR_WALL_4,
+               'msg': "You feel it in your bones. You have arrived.",
+               'weights': [0, 1, 4],
+               'gen': {'max_rooms': 15, 'min_rw': 6, 'max_rw': 14, 'min_rh': 5, 'max_rh': 11}},
+}
+
+
+def get_theme(floor_num):
+    for (lo, hi), data in THEME_DATA.items():
+        if lo <= floor_num <= hi:
+            return data
+    return list(THEME_DATA.values())[-1]  # fallback to deepest theme
+
+
+def scatter_enemies(tiles, floor_num, n, exclude=(), weights=None):
     floors = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
               if tiles[y][x] == FLOOR and (x, y) not in exclude]
     positions = random.sample(floors, min(n, len(floors)))
     scale = 1 + (floor_num - 1) * 0.2   # +20% stats per floor
     result = {}
     for pos in positions:
-        t = random.choice(ENEMY_TEMPLATES)
+        t = random.choices(ENEMY_TEMPLATES, weights=weights)[0]
         result[pos] = Enemy(
             name=t['name'], char=t['char'],
             hp=max(1, int(t['hp'] * scale)),
@@ -451,13 +486,13 @@ def scatter_enemies(tiles, floor_num, n, exclude=()):
     return result
 
 
-def generate_dungeon():
+def generate_dungeon(max_rooms=30, min_rw=5, max_rw=12, min_rh=4, max_rh=9):
     tiles = [[WALL] * MAP_W for _ in range(MAP_H)]
     rooms = []
 
-    for _ in range(30):
-        w = random.randint(5, 12)
-        h = random.randint(4, 9)
+    for _ in range(max_rooms):
+        w = random.randint(min_rw, max_rw)
+        h = random.randint(min_rh, max_rh)
         x = random.randint(1, MAP_W - w - 1)
         y = random.randint(1, MAP_H - h - 1)
         room = Room(x, y, w, h)
@@ -506,22 +541,40 @@ def scatter_terminals(tiles, n=2, exclude=()):
 
 
 def make_floor(floor_num):
-    tiles, rooms = generate_dungeon()
+    theme      = get_theme(floor_num)
+    tiles, rooms = generate_dungeon(**theme['gen'])
     if rooms:
-        start      = rooms[0].center()
-        stair_down = rooms[-1].center()
+        start = rooms[0].center()
     else:
-        start = stair_down = (MAP_W // 2, MAP_H // 2)
-    stair_up    = start if floor_num > 1 else None
+        start = (MAP_W // 2, MAP_H // 2)
+
+    stair_up   = start if floor_num > 1 else None
+    is_final   = (floor_num == MAX_FLOOR)
+    stair_down = None if is_final else (rooms[-1].center() if rooms else start)
+
     exclude_set = {stair_up, stair_down, start} - {None}
+    enemies = scatter_enemies(tiles, floor_num, n=3 + floor_num * 2,
+                              exclude=exclude_set, weights=theme['weights'])
+
+    # Final floor: place the boss in the last room
+    if is_final and rooms:
+        boss_pos = rooms[-1].center()
+        scale    = 1 + (floor_num - 1) * 0.2
+        enemies[boss_pos] = Enemy(
+            name='HADES-7 Remnant', char='H',
+            hp=int(100 * scale), atk=int(12 * scale), dfn=int(3 * scale),
+            xp_reward=500, boss=True,
+        )
+        exclude_set = exclude_set | {boss_pos}
+
     return {
         'tiles':      tiles,
         'start':      start,
         'stair_up':   stair_up,
         'stair_down': stair_down,
-        'items':      scatter_items(tiles, exclude=exclude_set),
-        'enemies':    scatter_enemies(tiles, floor_num, n=3 + floor_num * 2, exclude=exclude_set),
-        'terminals':  scatter_terminals(tiles, exclude=exclude_set),
+        'items':      scatter_items(tiles, exclude=exclude_set | set(enemies.keys())),
+        'enemies':    enemies,
+        'terminals':  scatter_terminals(tiles, exclude=exclude_set | set(enemies.keys())),
         'explored':   set(),
     }
 
@@ -624,8 +677,11 @@ COLOR_DARK   = 6  # explored but not currently visible
 COLOR_ITEM   = 7  # items on the map (green)
 COLOR_STAIR  = 8  # stairs (magenta)
 COLOR_ENEMY  = 9  # red — hostile units
-COLOR_TARGET   = 10 # yellow bold — targeting reticle
-COLOR_TERMINAL = 11 # cyan bold  — unread terminal
+COLOR_TARGET   = 10 # yellow bold  — targeting reticle
+COLOR_TERMINAL = 11 # cyan bold   — unread terminal
+COLOR_WALL_2   = 12 # yellow      — Research Wing walls
+COLOR_WALL_3   = 13 # red         — Sublevel Core walls
+COLOR_WALL_4   = 14 # green       — Signal Source walls (alien glow)
 
 
 def setup_colors():
@@ -642,6 +698,9 @@ def setup_colors():
     curses.init_pair(COLOR_ENEMY,  curses.COLOR_RED,     -1)
     curses.init_pair(COLOR_TARGET,   curses.COLOR_YELLOW,  -1)
     curses.init_pair(COLOR_TERMINAL, curses.COLOR_CYAN,    -1)
+    curses.init_pair(COLOR_WALL_2,   curses.COLOR_YELLOW,  -1)
+    curses.init_pair(COLOR_WALL_3,   curses.COLOR_RED,     -1)
+    curses.init_pair(COLOR_WALL_4,   curses.COLOR_GREEN,   -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -653,13 +712,15 @@ def draw_panel(stdscr, player, col, rows, current_floor):
                if player.hp <= player.max_hp // 4
                else panel_attr)
 
+    theme = get_theme(current_floor)
     lines = [
         ("CHARACTER",                                       header_attr),
         (None, 0),                                          # blank
         (player.name[:PANEL_W - 1],                        panel_attr),
         (f"{player.race} {player.char_class}"[:PANEL_W-1], panel_attr),
         (None, 0),                                          # blank
-        (f"Floor: {current_floor}",                        panel_attr),
+        (f"Floor: {current_floor}/{MAX_FLOOR}",            panel_attr),
+        (theme['name'][:PANEL_W - 1],                      panel_attr),
         (f"HP:  {player.hp:>3} / {player.max_hp:<3}",     hp_attr),
         (f"LVL: {player.level}",                           panel_attr),
         (f"XP:  {player.xp:>3} / {player.xp_next:<3}",   panel_attr),
@@ -699,6 +760,9 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
 
     stdscr.erase()
 
+    theme     = get_theme(current_floor)
+    wall_attr = curses.color_pair(theme['wall_cp'])
+
     # --- Map area ---
     for sy in range(view_h):
         my = sy + cam_y
@@ -718,7 +782,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
             elif (mx, my) in visible:
                 if tiles[my][mx] == WALL:
                     ch   = WALL
-                    attr = curses.color_pair(COLOR_WALL)
+                    attr = wall_attr
                 elif (mx, my) == stair_down:
                     ch   = '>'
                     attr = curses.color_pair(COLOR_STAIR) | curses.A_BOLD
@@ -751,6 +815,9 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                 elif terminals and (mx, my) in terminals:
                     ch   = 'T'
                     attr = curses.color_pair(COLOR_TERMINAL) | curses.A_DIM
+                elif tiles[my][mx] == WALL:
+                    ch   = WALL
+                    attr = wall_attr | curses.A_DIM
                 else:
                     ch   = tiles[my][mx]
                     attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
@@ -958,6 +1025,70 @@ def show_equipment_screen(stdscr, player):
                         player.inventory.remove(payload)
                         show_equipment_screen._cursor = 0
                         return result
+
+
+WIN_TERMINAL = Terminal(
+    "SIGNAL SOURCE — Final Contact",
+    ["The chamber is vast. The signal fills the space like light.",
+     "",
+     "It has been here for a very long time.",
+     "Patient. Waiting. Asking the same question, over and over.",
+     "",
+     "The crew of Erebus Station answered wrong.",
+     "The corporate response team answered wrong.",
+     "HADES-7 chose not to answer at all.",
+     "",
+     "You are still standing.",
+     "",
+     "You reach toward the source of the signal.",
+     "It reaches back.",
+     "",
+     "For the first time in a long time, the signal changes.",
+     "It has its answer.",
+     "So do you."],
+)
+
+
+def show_win_screen(stdscr, player):
+    """Victory screen. Returns True to play again, False to quit."""
+    panel_attr  = curses.color_pair(COLOR_TERMINAL)
+    header_attr = curses.color_pair(COLOR_TARGET) | curses.A_BOLD
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        stdscr.erase()
+
+        lines = [
+            ("* SIGNAL ANSWERED *",                          header_attr),
+            ("",                                             0),
+            ("You reached the Signal Source.",               panel_attr),
+            ("You answered.",                                panel_attr),
+            ("Whatever was asking — it listened.",           panel_attr),
+            ("The transmission ends.",                       panel_attr),
+            ("",                                             0),
+            (f"Name:   {player.name}",                      panel_attr),
+            (f"Race:   {player.race}",                      panel_attr),
+            (f"Class:  {player.char_class}",                panel_attr),
+            ("",                                             0),
+            (f"Level reached: {player.level}",              panel_attr),
+            ("",                                             0),
+            ("R: new character    Q: quit",                  panel_attr),
+        ]
+
+        start_row = max(0, (term_h - len(lines)) // 2)
+        for i, (text, attr) in enumerate(lines):
+            col = max(0, (term_w - len(text)) // 2)
+            try:
+                stdscr.addstr(start_row + i, col, text, attr)
+            except curses.error:
+                pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (ord('r'), ord('R')):
+            return True
+        if key in (ord('q'), ord('Q')):
+            return False
 
 
 def show_terminal(stdscr, terminal):
@@ -1427,6 +1558,7 @@ def main(stdscr):
         ord('3'):         ( 1,  1),
     }
 
+    won = False
     while True:
         key = stdscr.getch()
 
@@ -1496,6 +1628,8 @@ def main(stdscr):
                                 f"{enemy.name} destroyed! +{enemy.xp_reward} XP")
                             if lvl_msg:
                                 log.appendleft(lvl_msg)
+                            if enemy.boss:
+                                won = True
                         else:
                             log.appendleft(f"You shoot {enemy.name} for {dmg}.")
                     else:
@@ -1519,6 +1653,8 @@ def main(stdscr):
                     log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP")
                     if lvl_msg:
                         log.appendleft(lvl_msg)
+                    if enemy.boss:
+                        won = True
                 else:
                     edm = max(1, enemy.atk - player.dfn)
                     player.hp -= edm
@@ -1552,7 +1688,10 @@ def main(stdscr):
                     stair_up         = floor_data['stair_up']
                     stair_down       = floor_data['stair_down']
                     explored         = floor_data['explored']
+                    arrival = get_theme(current_floor)['msg']
                     log.appendleft(f"You descend to floor {current_floor}.")
+                    if arrival:
+                        log.appendleft(arrival)
                 elif stair_up and (px, py) == stair_up:
                     current_floor -= 1
                     floor_data       = floors[current_floor]
@@ -1572,6 +1711,34 @@ def main(stdscr):
 
         visible   = compute_fov(tiles, px, py)
         explored |= visible
+
+        # Win check
+        if won:
+            draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+                 stair_up, stair_down, current_floor, enemies_on_map, log,
+                 terminals=terminals_on_map)
+            show_terminal(stdscr, WIN_TERMINAL)
+            if show_win_screen(stdscr, player):
+                # New run
+                won            = False
+                player         = show_character_creation(stdscr)
+                current_floor  = 1
+                floors         = {}
+                floor_data     = make_floor(1)
+                floors[1]      = floor_data
+                tiles          = floor_data['tiles']
+                px, py         = floor_data['start']
+                items_on_map   = floor_data['items']
+                enemies_on_map = floor_data['enemies']
+                terminals_on_map = floor_data['terminals']
+                stair_up       = floor_data['stair_up']
+                stair_down     = floor_data['stair_down']
+                explored       = floor_data['explored']
+                log            = collections.deque(maxlen=LOG_LINES)
+                visible        = compute_fov(tiles, px, py)
+                explored      |= visible
+            else:
+                break
 
         # Death check
         if player.hp <= 0:
