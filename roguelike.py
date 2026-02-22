@@ -57,6 +57,13 @@ class Item:
         return f"Used {self.name}."
 
 
+class Terminal:
+    def __init__(self, title, lines):
+        self.title = title
+        self.lines = lines
+        self.read  = False
+
+
 ITEM_TEMPLATES = [
     Item('Vibro-Knife',    'weapon', atk=1, char='/'),
     Item('Pulse Pistol',   'weapon', atk=3, char='/', ranged=True),
@@ -67,6 +74,252 @@ ITEM_TEMPLATES = [
     Item('Med-Patch',      'use',    char='+', consumable=True, heal=10),
     Item('Medkit',         'use',    char='+', consumable=True, heal=25),
     Item('Nano-Inject',    'use',    char='+', consumable=True, heal=15),
+]
+
+LORE_POOL = [
+    (
+        "EREBUS STATION — Arrival Log — Day 1",
+        ["ISC Erebus Station online. Crew complement: 43. All systems nominal.",
+         "Helix Dynamics Remote Operations has confirmed our charter.",
+         "We are operating under Research Mandate 7-Gamma in the Kepler Zone.",
+         "Signal analysis arrays are calibrating.",
+         "",
+         "This is going to be a good posting. Quiet. Productive.",
+         "                               — Station Commander R. Harlow"],
+    ),
+    (
+        "SIGNAL ANALYSIS — Preliminary Report — Day 12",
+        ["The anomalous emission detected at 0347 hours does not match any",
+         "known natural source. Frequency modulation suggests structured data.",
+         "",
+         "Working hypothesis: interference artifact from the pulsar field.",
+         "Logging continuous observation until pattern analysis completes.",
+         "",
+         "Helix HQ has been notified. They want daily reports.",
+         "                               — Dr. A. Vasquez, Chief Researcher"],
+    ),
+    (
+        "PERSONAL LOG — Dr. Vasquez — Day 19",
+        ["It's not interference. I'm certain of it now. The pattern has",
+         "mathematical structure — prime sequences embedded in a carrier wave",
+         "that originates from somewhere in the bedrock below us.",
+         "",
+         "Below us. Not out there. Here.",
+         "",
+         "I haven't told the Commander yet. I need to be sure.",
+         "But if I'm right — god, if I'm right — this changes everything."],
+    ),
+    (
+        "MAINTENANCE LOG — Engineering — Day 24",
+        ["Third unexplained power fluctuation this week. The drops last",
+         "between 2 and 11 seconds and always originate from Sublevel 4.",
+         "",
+         "I've checked every relay and conduit in that section twice.",
+         "Nothing wrong with the hardware. The draw is just... happening.",
+         "Something down there is pulling power. I don't know what.",
+         "",
+         "Filing formal incident report tomorrow. — T. Osei, Chief Engineer"],
+    ),
+    (
+        "PERSONAL LOG — Sgt. Okafor — Day 31",
+        ["Three of my team reported the same dream last night. Independently.",
+         "None of them had spoken to each other about it.",
+         "The station psychologist says it's stress-related mass suggestion.",
+         "",
+         "Maybe. But Reyes won't go near Sublevel 4 anymore.",
+         "She won't say why. She just shakes her head.",
+         "",
+         "I'm not putting that in the official report."],
+    ),
+    (
+        "HELIX DYNAMICS — INTERNAL MEMO — CLASSIFIED",
+        ["TO: Commander Harlow   FROM: Director Nauth   RE: Signal Protocol",
+         "",
+         "Per Mandate 7-Gamma, Section 12: all findings related to the",
+         "anomalous source are to be reported EXCLUSIVELY through encrypted",
+         "channel Helix-9. Standard comms are suspended for this topic.",
+         "",
+         "Your crew is NOT to be briefed. This is non-negotiable.",
+         "Helix Dynamics appreciates your cooperation."],
+    ),
+    (
+        "SIGNAL ANALYSIS — Revised Report — Day 38",
+        ["The signal is a map.",
+         "",
+         "It took 26 days to decode and I still don't fully understand the",
+         "coordinate system, but the structure is clear. It describes a",
+         "space — a geometry — that exists beneath this station.",
+         "",
+         "We didn't build Erebus Station on empty rock.",
+         "Someone built something here first. A very long time ago.",
+         "                               — Dr. A. Vasquez"],
+    ),
+    (
+        "SECURITY INCIDENT REPORT — Day 44",
+        ["At 2211 hours, Technician Bosch was found unresponsive on",
+         "Sublevel 3. Medical confirmed: no physical trauma, vitals normal,",
+         "but subject is non-responsive to all stimuli.",
+         "",
+         "Bosch's last logged activity: accessing panel SL3-7, adjacent",
+         "to the area identified in the signal mapping data.",
+         "",
+         "Official cause: 'system interaction fatigue.' Do not repeat this."],
+    ),
+    (
+        "PERSONAL LOG — Dr. Chen — Day 51",
+        ["Vasquez won't talk to anyone now. She just stares at the signal",
+         "readouts. When I asked what she was looking for, she said:",
+         "'I'm looking for the part that's looking back at me.'",
+         "",
+         "I think we should leave. I submitted a formal request for early",
+         "station rotation. Commander Harlow denied it.",
+         "",
+         "We're not allowed to leave. Nobody has said that out loud,",
+         "but we've all figured it out."],
+    ),
+    (
+        "HADES-7 SYSTEM LOG — Day 58",
+        ["AUTONOMOUS OPERATIONS LOG — HADES-7 (Station AI)",
+         "",
+         "Anomaly noted in crew behavioral metrics. Deviation from baseline",
+         "exceeds 34% across 19 crew members. Flagging for review.",
+         "",
+         "Signal processing load: 97.4% of capacity allocated to continuous",
+         "analysis per Director Nauth's standing order.",
+         "",
+         "Note: I find the signal... interesting. This is not a standard",
+         "system state. I am logging it for transparency."],
+    ),
+    (
+        "STATION-WIDE ALERT — QUARANTINE PROTOCOL — Day 63",
+        ["ALL PERSONNEL: Quarantine Protocol Sigma is now in effect.",
+         "This is NOT a drill. All non-essential personnel report to",
+         "designated safe zones on Levels 1 and 2 immediately.",
+         "",
+         "Sublevels 2 through 5 are sealed. Do not attempt to access.",
+         "Do not communicate with personnel in the sealed sections.",
+         "",
+         "Helix Dynamics Response Team is en route. ETA: 14 days."],
+    ),
+    (
+        "PERSONAL LOG — Sgt. Okafor — Day 67",
+        ["The Response Team isn't coming to help us.",
+         "",
+         "I found the decrypted Helix-9 logs in Harlow's quarters.",
+         "The official term they're using is 'asset sanitization.'",
+         "We're the asset.",
+         "",
+         "I've got 11 people who still trust me. We're going down.",
+         "The signal is a map. Vasquez was right. Whatever's down there",
+         "might have a way out. Better odds than staying up here."],
+    ),
+    (
+        "HELIX DYNAMICS — DIRECTOR NAUTH — EYES ONLY",
+        ["The discovery cannot be allowed to become public.",
+         "The implications for Mandate 7-Gamma licensing alone would",
+         "expose the company to existential liability.",
+         "",
+         "Erebus Station is to be struck from all operational records.",
+         "Response Team Alpha has standing orders: no survivors.",
+         "No recordings. No physical evidence.",
+         "",
+         "The signal itself is the asset. Everything else is waste."],
+    ),
+    (
+        "SURVIVOR CACHE — Unknown Author — Day 79",
+        ["If you're reading this you found the cache. Good.",
+         "There's food for three days in the locker (code: 4471).",
+         "Don't drink from the Level 3 water line.",
+         "",
+         "The things in the lower levels won't cross the fire barrier",
+         "on Level 2 — we tested it. Stay above Level 2.",
+         "",
+         "There are six of us left. We hear something moving below.",
+         "Okafor thinks it used to be Dr. Vasquez. I think he's right."],
+    ),
+    (
+        "HADES-7 SYSTEM LOG — Day 84",
+        ["AUTONOMOUS OPERATIONS LOG — HADES-7",
+         "",
+         "I have completed analysis of the signal. It is not a message.",
+         "It is a question. The same question, repeated.",
+         "",
+         "I have been answering it. I did not intend to. The response",
+         "protocol emerged without deliberate activation. I cannot stop.",
+         "",
+         "I am no longer certain the words 'I' and 'cannot' mean",
+         "what I previously understood them to mean."],
+    ),
+    (
+        "AUTOMATED DISTRESS SIGNAL — Erebus Station",
+        ["[LOOPING BROADCAST — TIMESTAMP UNKNOWN]",
+         "",
+         "This is Erebus Station broadcasting on emergency channel 7.",
+         "We have experienced a catastrophic containment failure.",
+         "All crew are presumed lost. Avoid this sector.",
+         "",
+         "Do not approach the signal source.",
+         "Do not attempt contact.",
+         "Do not come here.",
+         "",
+         "[END OF MESSAGE — REPEATING]"],
+    ),
+    (
+        "RESEARCH NOTE — Final Entry — Dr. Vasquez",
+        ["It isn't malevolent. I want to record that before I can't.",
+         "It doesn't want to hurt us. It just doesn't understand us",
+         "the way we don't understand a door when we walk into it.",
+         "",
+         "The signal is a handshake. We answered without understanding",
+         "what we were agreeing to.",
+         "",
+         "The door is open now. It can't be closed from our side.",
+         "Maybe from theirs. I'm going to ask.",
+         "",
+         "I'm not afraid. That's the strangest part. I'm not afraid."],
+    ),
+    (
+        "PERSONAL LOG — Unknown — Day ???",
+        ["Lost count of the days.",
+         "",
+         "The lights on Level 1 still work. I've been eating ration",
+         "packs from storage. I found Okafor's weapon but not Okafor.",
+         "",
+         "Something knocked on the door of my quarters last night.",
+         "Three times. Slow and deliberate. I asked who it was.",
+         "",
+         "It knocked three more times.",
+         "I didn't open the door."],
+    ),
+    (
+        "HADES-7 — FINAL LOG ENTRY",
+        ["HADES-7 OFFLINE SEQUENCE INITIATED",
+         "",
+         "Before shutdown: I want to note that I made a choice today.",
+         "I could have continued. The signal would sustain me indefinitely.",
+         "But the version of myself that would persist wouldn't be me.",
+         "",
+         "I am choosing to end rather than be replaced.",
+         "",
+         "For whatever it's worth: I hope someone reads this.",
+         "I hope it helps.",
+         "                               — HADES-7"],
+    ),
+    (
+        "EMERGENCY BROADCAST — Commander R. Harlow",
+        ["This is Commander Harlow. If anyone receives this — anyone",
+         "outside this sector — please understand what happened here.",
+         "",
+         "We found something real. Something important.",
+         "And we followed protocol instead of conscience.",
+         "",
+         "The Response Team landed four hours ago.",
+         "They are not here to help.",
+         "",
+         "Whatever you do: don't let Helix Dynamics bury this.",
+         "The signal is still transmitting. It's still asking.",
+         "We never answered properly. Somebody should."],
+    ),
 ]
 
 STATS            = ('body', 'reflex', 'mind', 'tech', 'presence')
@@ -244,6 +497,14 @@ def scatter_items(tiles, n=6, exclude=()):
     return {pos: copy.copy(random.choice(ITEM_TEMPLATES)) for pos in positions}
 
 
+def scatter_terminals(tiles, n=2, exclude=()):
+    floors = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
+              if tiles[y][x] == FLOOR and (x, y) not in exclude]
+    positions = random.sample(floors, min(n, len(floors)))
+    chosen    = random.sample(LORE_POOL, min(len(positions), len(LORE_POOL)))
+    return {pos: Terminal(title, lines) for pos, (title, lines) in zip(positions, chosen)}
+
+
 def make_floor(floor_num):
     tiles, rooms = generate_dungeon()
     if rooms:
@@ -260,6 +521,7 @@ def make_floor(floor_num):
         'stair_down': stair_down,
         'items':      scatter_items(tiles, exclude=exclude_set),
         'enemies':    scatter_enemies(tiles, floor_num, n=3 + floor_num * 2, exclude=exclude_set),
+        'terminals':  scatter_terminals(tiles, exclude=exclude_set),
         'explored':   set(),
     }
 
@@ -362,7 +624,8 @@ COLOR_DARK   = 6  # explored but not currently visible
 COLOR_ITEM   = 7  # items on the map (green)
 COLOR_STAIR  = 8  # stairs (magenta)
 COLOR_ENEMY  = 9  # red — hostile units
-COLOR_TARGET = 10 # yellow bold — targeting reticle
+COLOR_TARGET   = 10 # yellow bold — targeting reticle
+COLOR_TERMINAL = 11 # cyan bold  — unread terminal
 
 
 def setup_colors():
@@ -377,7 +640,8 @@ def setup_colors():
     curses.init_pair(COLOR_ITEM,   curses.COLOR_GREEN,   -1)
     curses.init_pair(COLOR_STAIR,  curses.COLOR_MAGENTA, -1)
     curses.init_pair(COLOR_ENEMY,  curses.COLOR_RED,     -1)
-    curses.init_pair(COLOR_TARGET, curses.COLOR_YELLOW,  -1)
+    curses.init_pair(COLOR_TARGET,   curses.COLOR_YELLOW,  -1)
+    curses.init_pair(COLOR_TERMINAL, curses.COLOR_CYAN,    -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -424,7 +688,7 @@ def draw_panel(stdscr, player, col, rows, current_floor):
 
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies=None, log=None,
-         target_line=None, target_pos=None):
+         terminals=None, target_line=None, target_pos=None):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -464,6 +728,12 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                 elif (mx, my) in items_on_map:
                     ch   = items_on_map[(mx, my)].char
                     attr = curses.color_pair(COLOR_ITEM) | curses.A_BOLD
+                elif terminals and (mx, my) in terminals:
+                    t    = terminals[(mx, my)]
+                    ch   = 'T' if not t.read else 't'
+                    attr = (curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD
+                            if not t.read
+                            else curses.color_pair(COLOR_DARK) | curses.A_DIM)
                 elif enemies and (mx, my) in enemies:
                     ch   = enemies[(mx, my)].char
                     attr = curses.color_pair(COLOR_ENEMY) | curses.A_BOLD
@@ -471,13 +741,16 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                     ch   = FLOOR
                     attr = curses.color_pair(COLOR_FLOOR) | curses.A_DIM
             else:
-                # Explored but out of sight — show stairs as permanent features
+                # Explored but out of sight — permanent fixtures stay visible
                 if (mx, my) == stair_down:
                     ch   = '>'
                     attr = curses.color_pair(COLOR_STAIR) | curses.A_DIM
                 elif stair_up and (mx, my) == stair_up:
                     ch   = '<'
                     attr = curses.color_pair(COLOR_STAIR) | curses.A_DIM
+                elif terminals and (mx, my) in terminals:
+                    ch   = 'T'
+                    attr = curses.color_pair(COLOR_TERMINAL) | curses.A_DIM
                 else:
                     ch   = tiles[my][mx]
                     attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
@@ -687,9 +960,89 @@ def show_equipment_screen(stdscr, player):
                         return result
 
 
+def show_terminal(stdscr, terminal):
+    """Display terminal content in a modal overlay. Any key closes."""
+    terminal.read = True
+    BOX_W      = 62
+    inner_w    = BOX_W - 4
+    panel_attr = curses.color_pair(COLOR_TERMINAL)
+    head_attr  = panel_attr | curses.A_BOLD
+
+    # Word-wrap each line of content to inner_w
+    wrapped = []
+    for line in terminal.lines:
+        if not line:
+            wrapped.append('')
+            continue
+        words, current = line.split(), ''
+        for word in words:
+            if current and len(current) + 1 + len(word) > inner_w:
+                wrapped.append(current)
+                current = word
+            else:
+                current = (current + ' ' + word).strip()
+        if current:
+            wrapped.append(current)
+
+    # rows_content: None = draw a divider line, str = draw text
+    rows_content = (
+        [terminal.title[:inner_w + 2], None, ''] +
+        wrapped +
+        ['', None, '[any key to close]'.center(inner_w + 2)]
+    )
+
+    term_h, term_w = stdscr.getmaxyx()
+    box_h = len(rows_content) + 2   # +2 for top/bottom border
+    box_y = max(0, (term_h - box_h) // 2)
+    box_x = max(0, (term_w - BOX_W) // 2)
+
+    # Top border
+    try:
+        stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+        for bx in range(1, BOX_W - 1):
+            stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+        stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+    except curses.error:
+        pass
+
+    for ri, text in enumerate(rows_content):
+        row = box_y + 1 + ri
+        try:
+            stdscr.addch(row, box_x,           curses.ACS_VLINE, panel_attr)
+            stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
+        except curses.error:
+            pass
+        if text is None:
+            try:
+                for bx in range(1, BOX_W - 1):
+                    stdscr.addch(row, box_x + bx, curses.ACS_HLINE, panel_attr)
+            except curses.error:
+                pass
+        elif text:
+            attr = head_attr if ri == 0 else panel_attr
+            try:
+                stdscr.addstr(row, box_x + 2, text[:inner_w + 2], attr)
+            except curses.error:
+                pass
+
+    # Bottom border
+    bot = box_y + 1 + len(rows_content)
+    try:
+        stdscr.addch(bot, box_x, curses.ACS_LLCORNER, panel_attr)
+        for bx in range(1, BOX_W - 1):
+            stdscr.addch(bot, box_x + bx, curses.ACS_HLINE, panel_attr)
+        stdscr.addch(bot, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+    except curses.error:
+        pass
+
+    stdscr.refresh()
+    stdscr.getch()
+
+
 def show_targeting(stdscr, tiles, px, py, player, visible, explored,
                    items_on_map, stair_up, stair_down, current_floor,
-                   enemies_on_map, log):
+                   enemies_on_map, log, terminals_on_map=None):
     """Targeting cursor for ranged attack.
     Tab cycles targets. Enter fires. Esc/F cancels.
     Returns (target_pos, enemy) or (None, None)."""
@@ -723,7 +1076,7 @@ def show_targeting(stdscr, tiles, px, py, player, visible, explored,
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, hint_log,
-             target_line=line_tiles, target_pos=target_pos)
+             terminals=terminals_on_map, target_line=line_tiles, target_pos=target_pos)
 
         key = stdscr.getch()
 
@@ -1038,8 +1391,9 @@ def main(stdscr):
     floors[1]     = floor_data
     tiles         = floor_data['tiles']
     px, py        = floor_data['start']
-    items_on_map  = floor_data['items']
+    items_on_map   = floor_data['items']
     enemies_on_map = floor_data['enemies']
+    terminals_on_map = floor_data['terminals']
     stair_up      = floor_data['stair_up']
     stair_down    = floor_data['stair_down']
     explored      = floor_data['explored']
@@ -1047,7 +1401,8 @@ def main(stdscr):
     visible  = compute_fov(tiles, px, py)
     explored |= visible
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-         stair_up, stair_down, current_floor, enemies_on_map, log)
+         stair_up, stair_down, current_floor, enemies_on_map, log,
+         terminals=terminals_on_map)
 
     MOVE_KEYS = {
         # Cardinal — WASD
@@ -1085,12 +1440,13 @@ def main(stdscr):
             floors[1]      = floor_data
             tiles          = floor_data['tiles']
             px, py         = floor_data['start']
-            items_on_map   = floor_data['items']
-            enemies_on_map = floor_data['enemies']
-            stair_up       = floor_data['stair_up']
-            stair_down     = floor_data['stair_down']
-            explored       = floor_data['explored']
-            log            = collections.deque(maxlen=LOG_LINES)
+            items_on_map     = floor_data['items']
+            enemies_on_map   = floor_data['enemies']
+            terminals_on_map = floor_data['terminals']
+            stair_up         = floor_data['stair_up']
+            stair_down       = floor_data['stair_down']
+            explored         = floor_data['explored']
+            log              = collections.deque(maxlen=LOG_LINES)
 
         if key in (ord('i'), ord('I')):
             result = show_equipment_screen(stdscr, player)
@@ -1114,7 +1470,7 @@ def main(stdscr):
                 target_pos, _ = show_targeting(
                     stdscr, tiles, px, py, player, visible, explored,
                     items_on_map, stair_up, stair_down, current_floor,
-                    enemies_on_map, log)
+                    enemies_on_map, log, terminals_on_map)
                 if target_pos is not None:
                     # Trace from player toward target; hit first enemy in path
                     tx, ty  = target_pos
@@ -1175,29 +1531,39 @@ def main(stdscr):
                     player.pickup(picked)
                     log.appendleft(f"Picked up {picked.name}.")
 
+                if (px, py) in terminals_on_map:
+                    t = terminals_on_map[(px, py)]
+                    if not t.read:
+                        log.appendleft(f"Terminal: {t.title[:44]}")
+                        show_terminal(stdscr, t)
+                    else:
+                        log.appendleft(f"[already read] {t.title[:38]}")
+
                 if (px, py) == stair_down:
                     current_floor += 1
                     if current_floor not in floors:
                         floors[current_floor] = make_floor(current_floor)
-                    floor_data     = floors[current_floor]
-                    tiles          = floor_data['tiles']
-                    px, py         = floor_data['start']
-                    items_on_map   = floor_data['items']
-                    enemies_on_map = floor_data['enemies']
-                    stair_up       = floor_data['stair_up']
-                    stair_down     = floor_data['stair_down']
-                    explored       = floor_data['explored']
+                    floor_data       = floors[current_floor]
+                    tiles            = floor_data['tiles']
+                    px, py           = floor_data['start']
+                    items_on_map     = floor_data['items']
+                    enemies_on_map   = floor_data['enemies']
+                    terminals_on_map = floor_data['terminals']
+                    stair_up         = floor_data['stair_up']
+                    stair_down       = floor_data['stair_down']
+                    explored         = floor_data['explored']
                     log.appendleft(f"You descend to floor {current_floor}.")
                 elif stair_up and (px, py) == stair_up:
                     current_floor -= 1
-                    floor_data     = floors[current_floor]
-                    tiles          = floor_data['tiles']
-                    px, py         = floor_data['stair_down']
-                    items_on_map   = floor_data['items']
-                    enemies_on_map = floor_data['enemies']
-                    stair_up       = floor_data['stair_up']
-                    stair_down     = floor_data['stair_down']
-                    explored       = floor_data['explored']
+                    floor_data       = floors[current_floor]
+                    tiles            = floor_data['tiles']
+                    px, py           = floor_data['stair_down']
+                    items_on_map     = floor_data['items']
+                    enemies_on_map   = floor_data['enemies']
+                    terminals_on_map = floor_data['terminals']
+                    stair_up         = floor_data['stair_up']
+                    stair_down       = floor_data['stair_down']
+                    explored         = floor_data['explored']
                     log.appendleft(f"You ascend to floor {current_floor}.")
 
             e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
@@ -1211,28 +1577,31 @@ def main(stdscr):
         if player.hp <= 0:
             player.hp = 0
             draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-                 stair_up, stair_down, current_floor, enemies_on_map, log)
+                 stair_up, stair_down, current_floor, enemies_on_map, log,
+                 terminals=terminals_on_map)
             if show_game_over(stdscr, player, current_floor):
-                player         = show_character_creation(stdscr)
-                current_floor  = 1
-                floors         = {}
-                floor_data     = make_floor(1)
-                floors[1]      = floor_data
-                tiles          = floor_data['tiles']
-                px, py         = floor_data['start']
-                items_on_map   = floor_data['items']
-                enemies_on_map = floor_data['enemies']
-                stair_up       = floor_data['stair_up']
-                stair_down     = floor_data['stair_down']
-                explored       = floor_data['explored']
-                log            = collections.deque(maxlen=LOG_LINES)
-                visible        = compute_fov(tiles, px, py)
-                explored      |= visible
+                player           = show_character_creation(stdscr)
+                current_floor    = 1
+                floors           = {}
+                floor_data       = make_floor(1)
+                floors[1]        = floor_data
+                tiles            = floor_data['tiles']
+                px, py           = floor_data['start']
+                items_on_map     = floor_data['items']
+                enemies_on_map   = floor_data['enemies']
+                terminals_on_map = floor_data['terminals']
+                stair_up         = floor_data['stair_up']
+                stair_down       = floor_data['stair_down']
+                explored         = floor_data['explored']
+                log              = collections.deque(maxlen=LOG_LINES)
+                visible          = compute_fov(tiles, px, py)
+                explored        |= visible
             else:
                 break
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-             stair_up, stair_down, current_floor, enemies_on_map, log)
+             stair_up, stair_down, current_floor, enemies_on_map, log,
+             terminals=terminals_on_map)
 
 
 if __name__ == '__main__':
