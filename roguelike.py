@@ -42,30 +42,70 @@ class Item:
 
 
 ITEM_TEMPLATES = [
-    Item('Dagger',    'weapon', atk=1, char='/'),
-    Item('Sword',     'weapon', atk=3, char='/'),
-    Item('Axe',       'weapon', atk=5, char='/'),
-    Item('Leather',   'armor',  dfn=1, char=']'),
-    Item('Chainmail', 'armor',  dfn=3, char=']'),
-    Item('Plate',     'armor',  dfn=5, char=']'),
+    Item('Vibro-Knife',    'weapon', atk=1, char='/'),
+    Item('Pulse Pistol',   'weapon', atk=3, char='/'),
+    Item('Arc Rifle',      'weapon', atk=5, char='/'),
+    Item('Ballistic Weave','armor',  dfn=1, char=']'),
+    Item('Combat Exosuit', 'armor',  dfn=3, char=']'),
+    Item('Aegis Plate',    'armor',  dfn=5, char=']'),
 ]
+
+STATS            = ('body', 'reflex', 'mind', 'tech', 'presence')
+STAT_LABELS      = ('Body', 'Reflex', 'Mind', 'Tech', 'Presence')
+STAT_BASE        = 5
+STAT_MIN         = 1
+STAT_MAX         = 15
+POINT_BUY_POINTS = 10
+
+RACES = {
+    'Human':   {'desc': 'Adaptable and resourceful. Bonuses across all stats.',
+                'mods': {'body': 1, 'reflex': 1, 'mind': 1, 'tech': 1, 'presence': 1}},
+    'Synth':   {'desc': 'Android intelligence. High Tech and Mind; weak social presence.',
+                'mods': {'body': -1, 'reflex': 0, 'mind': 2, 'tech': 3, 'presence': -3}},
+    'Voryn':   {'desc': 'Alien predator. High Reflex and Body; struggles with technology.',
+                'mods': {'body': 2, 'reflex': 3, 'mind': -2, 'tech': -2, 'presence': 0}},
+    'Augment': {'desc': 'Cybernetically enhanced human. Strong and technical; inhuman.',
+                'mods': {'body': 2, 'reflex': 1, 'mind': -2, 'tech': 2, 'presence': -3}},
+}
+
+CLASSES = {
+    'Soldier':  {'desc': 'Combat specialist. Excels in physical confrontation.',
+                 'mods': {'body': 3, 'reflex': 2, 'mind': -1, 'tech': -1, 'presence': -1}},
+    'Engineer': {'desc': 'Tech expert. Builds, repairs, and improvises solutions.',
+                 'mods': {'body': -1, 'reflex': -1, 'mind': 2, 'tech': 3, 'presence': -1}},
+    'Medic':    {'desc': 'Field medic and negotiator. Keeps the team alive.',
+                 'mods': {'body': -2, 'reflex': -1, 'mind': 2, 'tech': 1, 'presence': 3}},
+    'Hacker':   {'desc': 'Systems infiltrator. Exploits technology and environments.',
+                 'mods': {'body': -2, 'reflex': 2, 'mind': 1, 'tech': 3, 'presence': -2}},
+}
 
 
 class Player:
     XP_PER_LEVEL = 100
     SLOTS = ('weapon', 'armor')
 
-    def __init__(self):
-        self.hp        = 30
-        self.max_hp    = 30
-        self.level     = 1
-        self.xp        = 0
-        self.inventory = []
-        self.equipment = {'weapon': None, 'armor': None}
+    def __init__(self, name='Unknown', race='Human', char_class='Soldier',
+                 body=5, reflex=5, mind=5, tech=5, presence=5):
+        self.name       = name
+        self.race       = race
+        self.char_class = char_class
+        self.body       = body
+        self.reflex     = reflex
+        self.mind       = mind
+        self.tech       = tech
+        self.presence   = presence
+        self.max_hp     = 20 + body * 2   # body=5 → 30 HP (matches old default)
+        self.hp         = self.max_hp
+        self.level      = 1
+        self.xp         = 0
+        self.inventory  = []
+        self.equipment  = {'weapon': None, 'armor': None}
 
     @property
     def atk(self):
-        return 1 + sum(i.atk for i in self.equipment.values() if i)
+        weapon_bonus = sum(i.atk for i in self.equipment.values() if i)
+        return 1 + max(0, (self.body - 5) // 2) + weapon_bonus
+        # body=5 → 1 (same as before); body=7 → 2; body=10 → 3
 
     @property
     def dfn(self):
@@ -98,6 +138,42 @@ class Player:
         if item:
             self.inventory.append(item)
             self.equipment[slot] = None
+
+
+class Enemy:
+    def __init__(self, name, char, hp, atk, dfn, xp_reward):
+        self.name      = name
+        self.char      = char
+        self.hp        = hp
+        self.max_hp    = hp
+        self.atk       = atk
+        self.dfn       = dfn
+        self.xp_reward = xp_reward
+
+
+ENEMY_TEMPLATES = [
+    {'name': 'Drone',   'char': 'd', 'hp': 8,  'atk': 3, 'dfn': 0, 'xp': 10},
+    {'name': 'Sentry',  'char': 'S', 'hp': 15, 'atk': 5, 'dfn': 2, 'xp': 25},
+    {'name': 'Stalker', 'char': 'X', 'hp': 22, 'atk': 7, 'dfn': 1, 'xp': 40},
+]
+
+
+def scatter_enemies(tiles, floor_num, n, exclude=()):
+    floors = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
+              if tiles[y][x] == FLOOR and (x, y) not in exclude]
+    positions = random.sample(floors, min(n, len(floors)))
+    scale = 1 + (floor_num - 1) * 0.2   # +20% stats per floor
+    result = {}
+    for pos in positions:
+        t = random.choice(ENEMY_TEMPLATES)
+        result[pos] = Enemy(
+            name=t['name'], char=t['char'],
+            hp=max(1, int(t['hp'] * scale)),
+            atk=max(1, int(t['atk'] * scale)),
+            dfn=int(t['dfn'] * scale),
+            xp_reward=int(t['xp'] * scale),
+        )
+    return result
 
 
 def generate_dungeon():
@@ -153,14 +229,15 @@ def make_floor(floor_num):
         stair_down = rooms[-1].center()
     else:
         start = stair_down = (MAP_W // 2, MAP_H // 2)
-    stair_up = start if floor_num > 1 else None
-    exclude  = {stair_up, stair_down} - {None}
+    stair_up    = start if floor_num > 1 else None
+    exclude_set = {stair_up, stair_down, start} - {None}
     return {
         'tiles':      tiles,
         'start':      start,
         'stair_up':   stair_up,
         'stair_down': stair_down,
-        'items':      scatter_items(tiles, exclude=exclude),
+        'items':      scatter_items(tiles, exclude=exclude_set),
+        'enemies':    scatter_enemies(tiles, floor_num, n=3 + floor_num * 2, exclude=exclude_set),
         'explored':   set(),
     }
 
@@ -215,6 +292,7 @@ COLOR_HP_LOW = 5
 COLOR_DARK   = 6  # explored but not currently visible
 COLOR_ITEM   = 7  # items on the map (green)
 COLOR_STAIR  = 8  # stairs (magenta)
+COLOR_ENEMY  = 9  # red — hostile units
 
 
 def setup_colors():
@@ -228,6 +306,7 @@ def setup_colors():
     curses.init_pair(COLOR_DARK,   curses.COLOR_WHITE,  -1)
     curses.init_pair(COLOR_ITEM,   curses.COLOR_GREEN,   -1)
     curses.init_pair(COLOR_STAIR,  curses.COLOR_MAGENTA, -1)
+    curses.init_pair(COLOR_ENEMY,  curses.COLOR_RED,     -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -240,16 +319,19 @@ def draw_panel(stdscr, player, col, rows, current_floor):
                else panel_attr)
 
     lines = [
-        ("CHARACTER", header_attr),
-        (None, 0),                                             # blank
-        (f"Floor: {current_floor}", panel_attr),
-        (f"HP:  {player.hp:>3} / {player.max_hp:<3}", hp_attr),
-        (f"LVL: {player.level}", panel_attr),
-        (f"XP:  {player.xp:>3} / {player.xp_next:<3}", panel_attr),
-        (f"ATK: {player.atk}", panel_attr),
-        (f"DEF: {player.dfn}", panel_attr),
-        (None, 0),                                             # blank
-        ("[I] Equipment", panel_attr),
+        ("CHARACTER",                                       header_attr),
+        (None, 0),                                          # blank
+        (player.name[:PANEL_W - 1],                        panel_attr),
+        (f"{player.race} {player.char_class}"[:PANEL_W-1], panel_attr),
+        (None, 0),                                          # blank
+        (f"Floor: {current_floor}",                        panel_attr),
+        (f"HP:  {player.hp:>3} / {player.max_hp:<3}",     hp_attr),
+        (f"LVL: {player.level}",                           panel_attr),
+        (f"XP:  {player.xp:>3} / {player.xp_next:<3}",   panel_attr),
+        (f"ATK: {player.atk}",                             panel_attr),
+        (f"DEF: {player.dfn}",                             panel_attr),
+        (None, 0),                                          # blank
+        ("[I] Equipment",                                   panel_attr),
     ]
 
     for row in range(rows):
@@ -270,7 +352,7 @@ def draw_panel(stdscr, player, col, rows, current_floor):
 
 
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-         stair_up, stair_down, current_floor):
+         stair_up, stair_down, current_floor, enemies=None, msg=''):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - 2              # reserve two rows for the status bar
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -310,6 +392,9 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                 elif (mx, my) in items_on_map:
                     ch   = items_on_map[(mx, my)].char
                     attr = curses.color_pair(COLOR_ITEM) | curses.A_BOLD
+                elif enemies and (mx, my) in enemies:
+                    ch   = enemies[(mx, my)].char
+                    attr = curses.color_pair(COLOR_ENEMY) | curses.A_BOLD
                 else:
                     ch   = FLOOR
                     attr = curses.color_pair(COLOR_FLOOR) | curses.A_DIM
@@ -335,12 +420,12 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
     draw_panel(stdscr, player, panel_col, view_h, current_floor)
 
     # --- Status bar ---
-    status  = " WASD/Arrows: move  |  >/< : stairs  |  I: equipment  |  R: new dungeon  |  Q: quit "
+    status_text = msg if msg else " WASD/Arrows:move  >/< stairs  I:equip  R:reset  Q:quit"
     divider = curses.ACS_HLINE
     try:
         for sx in range(term_w - 1):
             stdscr.addch(term_h - 2, sx, divider)
-        stdscr.addstr(term_h - 1, 0, status[: term_w - 1])
+        stdscr.addstr(term_h - 1, 0, status_text[: term_w - 1])
     except curses.error:
         pass
 
@@ -499,12 +584,295 @@ def show_equipment_screen(stdscr, player):
                     show_equipment_screen._cursor = 0
 
 
+def show_character_creation(stdscr):
+    """Multi-step character creation wizard. Returns a fully configured Player."""
+    panel_attr  = curses.color_pair(COLOR_PANEL)
+    header_attr = panel_attr | curses.A_BOLD
+    sel_attr    = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+
+    race_names  = list(RACES.keys())
+    class_names = list(CLASSES.keys())
+
+    def clr():
+        stdscr.erase()
+
+    def safe_addstr(row, col, text, attr=0):
+        try:
+            stdscr.addstr(row, col, text, attr)
+        except curses.error:
+            pass
+
+    def compute_base(race_name, class_name):
+        """Apply race + class mods to STAT_BASE, clamped to STAT_MIN."""
+        rmods = RACES[race_name]['mods']
+        cmods = CLASSES[class_name]['mods']
+        result = {}
+        for s in STATS:
+            val = STAT_BASE + rmods.get(s, 0) + cmods.get(s, 0)
+            result[s] = max(STAT_MIN, val)
+        return result
+
+    def mod_str(mods):
+        parts = []
+        for s, label in zip(STATS, STAT_LABELS):
+            v = mods.get(s, 0)
+            if v != 0:
+                parts.append(f"{label[0]}{v:+d}")
+        return '  '.join(parts) if parts else '(no modifiers)'
+
+    step       = 0
+    name       = ''
+    race_idx   = 0
+    class_idx  = 0
+    alloc      = {s: 0 for s in STATS}
+    stat_cursor = 0  # index into STATS for point-buy step
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        clr()
+
+        # ── Step 0: Name ────────────────────────────────────────────────────
+        if step == 0:
+            title = "CHARACTER CREATION — Name"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2, "Enter your character's name (max 20 chars):", panel_attr)
+            cursor_name = name + '_'
+            safe_addstr(5, 4, cursor_name[:term_w - 5], sel_attr)
+            safe_addstr(7, 2, "Press Enter to continue.", panel_attr)
+            stdscr.refresh()
+
+            key = stdscr.getch()
+            if key in (curses.KEY_ENTER, 10, 13):
+                if name.strip():
+                    step = 1
+            elif key in (curses.KEY_BACKSPACE, 127, 8):
+                name = name[:-1]
+            elif 32 <= key <= 126 and len(name) < 20:
+                name += chr(key)
+
+        # ── Step 1: Race ─────────────────────────────────────────────────────
+        elif step == 1:
+            title = "CHARACTER CREATION — Race"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2, "W/S: navigate   Enter: select   Esc: back", panel_attr)
+
+            for i, rname in enumerate(race_names):
+                row    = 5 + i * 3
+                rdata  = RACES[rname]
+                prefix = '> ' if i == race_idx else '  '
+                attr   = sel_attr if i == race_idx else panel_attr
+                safe_addstr(row,     2, f"{prefix}{rname}", attr)
+                safe_addstr(row + 1, 4, rdata['desc'][:term_w - 6], panel_attr)
+                safe_addstr(row + 2, 4, mod_str(rdata['mods']), panel_attr)
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == 27:
+                step = 0
+            elif key in (curses.KEY_UP, ord('w'), ord('W')):
+                race_idx = max(0, race_idx - 1)
+            elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
+                race_idx = min(len(race_names) - 1, race_idx + 1)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                alloc = {s: 0 for s in STATS}   # reset alloc on race change
+                step  = 2
+
+        # ── Step 2: Class ────────────────────────────────────────────────────
+        elif step == 2:
+            title = "CHARACTER CREATION — Class"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2, "W/S: navigate   Enter: select   Esc: back", panel_attr)
+
+            for i, cname in enumerate(class_names):
+                row    = 5 + i * 3
+                cdata  = CLASSES[cname]
+                prefix = '> ' if i == class_idx else '  '
+                attr   = sel_attr if i == class_idx else panel_attr
+                safe_addstr(row,     2, f"{prefix}{cname}", attr)
+                safe_addstr(row + 1, 4, cdata['desc'][:term_w - 6], panel_attr)
+                safe_addstr(row + 2, 4, mod_str(cdata['mods']), panel_attr)
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == 27:
+                step = 1
+            elif key in (curses.KEY_UP, ord('w'), ord('W')):
+                class_idx = max(0, class_idx - 1)
+            elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
+                class_idx = min(len(class_names) - 1, class_idx + 1)
+            elif key in (curses.KEY_ENTER, 10, 13):
+                alloc = {s: 0 for s in STATS}   # reset alloc on class change
+                step  = 3
+
+        # ── Step 3: Point Buy ─────────────────────────────────────────────────
+        elif step == 3:
+            rname   = race_names[race_idx]
+            cname   = class_names[class_idx]
+            base    = compute_base(rname, cname)
+            remain  = POINT_BUY_POINTS - sum(alloc.values())
+
+            title = "CHARACTER CREATION — Distribute Points"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2,
+                f"Points remaining: {remain}   "
+                "W/S: select stat   A/D: add/remove   Enter: confirm   Esc: back",
+                panel_attr)
+
+            for i, (s, label) in enumerate(zip(STATS, STAT_LABELS)):
+                row = 5 + i * 2
+                val = base[s] + alloc[s]
+                bar = '█' * val + '░' * (STAT_MAX - val)
+                attr = sel_attr if i == stat_cursor else panel_attr
+                safe_addstr(row,     2, f"{'> ' if i == stat_cursor else '  '}{label:<10} {val:>2}  {bar[:STAT_MAX]}", attr)
+
+            safe_addstr(5 + len(STATS) * 2 + 1, 2,
+                f"Max HP will be: {20 + (base['body'] + alloc['body']) * 2}",
+                panel_attr)
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == 27:
+                step = 2
+            elif key in (curses.KEY_UP, ord('w'), ord('W')):
+                stat_cursor = max(0, stat_cursor - 1)
+            elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
+                stat_cursor = min(len(STATS) - 1, stat_cursor + 1)
+            elif key in (curses.KEY_RIGHT, ord('d'), ord('D')):
+                s   = STATS[stat_cursor]
+                val = base[s] + alloc[s]
+                if remain > 0 and val < STAT_MAX:
+                    alloc[s] += 1
+            elif key in (curses.KEY_LEFT, ord('a'), ord('A')):
+                s = STATS[stat_cursor]
+                if alloc[s] > 0:
+                    alloc[s] -= 1
+            elif key in (curses.KEY_ENTER, 10, 13):
+                step = 4
+
+        # ── Step 4: Confirm ────────────────────────────────────────────────────
+        elif step == 4:
+            rname  = race_names[race_idx]
+            cname  = class_names[class_idx]
+            base   = compute_base(rname, cname)
+            final  = {s: base[s] + alloc[s] for s in STATS}
+            max_hp = 20 + final['body'] * 2
+
+            title = "CHARACTER CREATION — Confirm"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2, f"Name:   {name}", panel_attr)
+            safe_addstr(4, 2, f"Race:   {rname}", panel_attr)
+            safe_addstr(5, 2, f"Class:  {cname}", panel_attr)
+            safe_addstr(7, 2, "STATS", header_attr)
+
+            for i, (s, label) in enumerate(zip(STATS, STAT_LABELS)):
+                safe_addstr(8 + i, 4, f"{label:<10} {final[s]:>2}", panel_attr)
+
+            safe_addstr(8 + len(STATS) + 1, 2, f"Max HP: {max_hp}", panel_attr)
+            safe_addstr(8 + len(STATS) + 3, 2, "Enter: begin game   Esc: back", panel_attr)
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == 27:
+                step = 3
+            elif key in (curses.KEY_ENTER, 10, 13):
+                return Player(
+                    name=name,
+                    race=rname,
+                    char_class=cname,
+                    body=final['body'],
+                    reflex=final['reflex'],
+                    mind=final['mind'],
+                    tech=final['tech'],
+                    presence=final['presence'],
+                )
+
+
+def enemy_turn(enemies, tiles, px, py, visible, player):
+    """Move and attack with every enemy. Returns list of combat message strings."""
+    msgs = []
+    for (ex, ey), enemy in list(enemies.items()):
+        if (ex, ey) in visible:
+            ddx = (1 if px > ex else -1) if px != ex else 0
+            ddy = (1 if py > ey else -1) if py != ey else 0
+            for ndx, ndy in [(ddx, ddy), (ddx, 0), (0, ddy)]:
+                if ndx == 0 and ndy == 0:
+                    continue
+                nx, ny = ex + ndx, ey + ndy
+                if (nx, ny) == (px, py):
+                    dmg = max(1, enemy.atk - player.dfn)
+                    player.hp -= dmg
+                    msgs.append(f"{enemy.name} hits you for {dmg}!")
+                    break
+                if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                        and tiles[ny][nx] == FLOOR
+                        and (nx, ny) not in enemies):
+                    enemies[(nx, ny)] = enemy
+                    del enemies[(ex, ey)]
+                    break
+        else:
+            dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+            random.shuffle(dirs)
+            for ndx, ndy in dirs:
+                nx, ny = ex + ndx, ey + ndy
+                if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                        and tiles[ny][nx] == FLOOR
+                        and (nx, ny) not in enemies
+                        and (nx, ny) != (px, py)):
+                    enemies[(nx, ny)] = enemy
+                    del enemies[(ex, ey)]
+                    break
+    return msgs
+
+
+def show_game_over(stdscr, player, floor_reached):
+    """Show game-over screen. Returns True to restart, False to quit."""
+    panel_attr  = curses.color_pair(COLOR_PANEL)
+    header_attr = curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        stdscr.erase()
+
+        lines = [
+            ("* YOU DIED *",                         header_attr),
+            ("",                                     0),
+            (f"Name:   {player.name}",               panel_attr),
+            (f"Race:   {player.race}",               panel_attr),
+            (f"Class:  {player.char_class}",         panel_attr),
+            ("",                                     0),
+            (f"Floor reached: {floor_reached}",      panel_attr),
+            (f"Level:         {player.level}",       panel_attr),
+            ("",                                     0),
+            ("R: new character    Q: quit",          panel_attr),
+        ]
+
+        start_row = max(0, (term_h - len(lines)) // 2)
+        for i, (text, attr) in enumerate(lines):
+            col = max(0, (term_w - len(text)) // 2)
+            try:
+                stdscr.addstr(start_row + i, col, text, attr)
+            except curses.error:
+                pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key in (ord('r'), ord('R')):
+            return True
+        if key in (ord('q'), ord('Q')):
+            return False
+
+
 def main(stdscr):
     curses.curs_set(0)
     stdscr.keypad(True)
     setup_colors()
 
-    player = Player()
+    player = show_character_creation(stdscr)
     current_floor = 1
     floors        = {}
     floor_data    = make_floor(1)
@@ -512,13 +880,15 @@ def main(stdscr):
     tiles         = floor_data['tiles']
     px, py        = floor_data['start']
     items_on_map  = floor_data['items']
+    enemies_on_map = floor_data['enemies']
     stair_up      = floor_data['stair_up']
     stair_down    = floor_data['stair_down']
     explored      = floor_data['explored']
+    msg      = ''
     visible  = compute_fov(tiles, px, py)
     explored |= visible
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-         stair_up, stair_down, current_floor)
+         stair_up, stair_down, current_floor, enemies_on_map, msg)
 
     MOVE_KEYS = {
         ord('w'):         ( 0, -1),
@@ -538,16 +908,18 @@ def main(stdscr):
             break
 
         if key in (ord('r'), ord('R')):
-            current_floor = 1
-            floors        = {}
-            floor_data    = make_floor(1)
-            floors[1]     = floor_data
-            tiles         = floor_data['tiles']
-            px, py        = floor_data['start']
-            items_on_map  = floor_data['items']
-            stair_up      = floor_data['stair_up']
-            stair_down    = floor_data['stair_down']
-            explored      = floor_data['explored']
+            current_floor  = 1
+            floors         = {}
+            floor_data     = make_floor(1)
+            floors[1]      = floor_data
+            tiles          = floor_data['tiles']
+            px, py         = floor_data['start']
+            items_on_map   = floor_data['items']
+            enemies_on_map = floor_data['enemies']
+            stair_up       = floor_data['stair_up']
+            stair_down     = floor_data['stair_down']
+            explored       = floor_data['explored']
+            msg            = ''
 
         if key in (ord('i'), ord('I')):
             show_equipment_screen(stdscr, player)
@@ -555,39 +927,87 @@ def main(stdscr):
         if key in MOVE_KEYS:
             dx, dy = MOVE_KEYS[key]
             nx, ny = px + dx, py + dy
-            if 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
+            if (nx, ny) in enemies_on_map:
+                # Bump attack
+                enemy = enemies_on_map[(nx, ny)]
+                dmg = max(1, player.atk - enemy.dfn)
+                enemy.hp -= dmg
+                msg = f"You hit {enemy.name} for {dmg}."
+                if enemy.hp <= 0:
+                    del enemies_on_map[(nx, ny)]
+                    player.gain_xp(enemy.xp_reward)
+                    msg += f" {enemy.name} destroyed! +{enemy.xp_reward} XP"
+                else:
+                    edm = max(1, enemy.atk - player.dfn)
+                    player.hp -= edm
+                    msg += f" {enemy.name} hits back for {edm}."
+            elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
                 px, py = nx, ny
                 player.gain_xp(1)
                 # Auto-pickup item on tile
                 if (px, py) in items_on_map:
                     player.pickup(items_on_map.pop((px, py)))
+                msg = ''
 
                 # Stair traversal
                 if (px, py) == stair_down:
                     current_floor += 1
                     if current_floor not in floors:
                         floors[current_floor] = make_floor(current_floor)
-                    floor_data   = floors[current_floor]
-                    tiles        = floor_data['tiles']
-                    px, py       = floor_data['start']
-                    items_on_map = floor_data['items']
-                    stair_up     = floor_data['stair_up']
-                    stair_down   = floor_data['stair_down']
-                    explored     = floor_data['explored']
+                    floor_data     = floors[current_floor]
+                    tiles          = floor_data['tiles']
+                    px, py         = floor_data['start']
+                    items_on_map   = floor_data['items']
+                    enemies_on_map = floor_data['enemies']
+                    stair_up       = floor_data['stair_up']
+                    stair_down     = floor_data['stair_down']
+                    explored       = floor_data['explored']
                 elif stair_up and (px, py) == stair_up:
                     current_floor -= 1
-                    floor_data   = floors[current_floor]
-                    tiles        = floor_data['tiles']
-                    px, py       = floor_data['stair_down']
-                    items_on_map = floor_data['items']
-                    stair_up     = floor_data['stair_up']
-                    stair_down   = floor_data['stair_down']
-                    explored     = floor_data['explored']
+                    floor_data     = floors[current_floor]
+                    tiles          = floor_data['tiles']
+                    px, py         = floor_data['stair_down']
+                    items_on_map   = floor_data['items']
+                    enemies_on_map = floor_data['enemies']
+                    stair_up       = floor_data['stair_up']
+                    stair_down     = floor_data['stair_down']
+                    explored       = floor_data['explored']
+
+            # Enemy turn after any player action
+            e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+            if e_msgs:
+                suffix = '  ' + ' '.join(e_msgs)
+                msg = (msg + suffix).strip() if msg else ' '.join(e_msgs)
 
         visible   = compute_fov(tiles, px, py)
         explored |= visible
+
+        # Death check
+        if player.hp <= 0:
+            player.hp = 0
+            draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+                 stair_up, stair_down, current_floor, enemies_on_map, msg)
+            if show_game_over(stdscr, player, current_floor):
+                player         = show_character_creation(stdscr)
+                current_floor  = 1
+                floors         = {}
+                floor_data     = make_floor(1)
+                floors[1]      = floor_data
+                tiles          = floor_data['tiles']
+                px, py         = floor_data['start']
+                items_on_map   = floor_data['items']
+                enemies_on_map = floor_data['enemies']
+                stair_up       = floor_data['stair_up']
+                stair_down     = floor_data['stair_down']
+                explored       = floor_data['explored']
+                msg            = ''
+                visible        = compute_fov(tiles, px, py)
+                explored      |= visible
+            else:
+                break
+
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
-             stair_up, stair_down, current_floor)
+             stair_up, stair_down, current_floor, enemies_on_map, msg)
 
 
 if __name__ == '__main__':

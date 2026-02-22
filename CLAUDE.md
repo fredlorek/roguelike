@@ -50,6 +50,28 @@ Syntax check: `python3 -m py_compile roguelike.py`
 - Stair positions are room centers: `stair_down = rooms[-1].center()`, `start/stair_up = rooms[0].center()`
 - Floor 1 has `stair_up = None`; floors > 1 have `stair_up = start`
 
+## Long-term Plan
+
+### Goal
+Build a sci-fi RPG with procedurally generated story elements, a full game universe, graphics, and sound — starting small and iterating.
+
+### Technology path
+- **Now:** Python + `curses` for prototyping game systems (combat, inventory, world gen, story)
+- **Later:** Port rendering layer to `pygame` or `pygame-ce` for 2D graphics and sound
+- Both are free and open source (LGPL) — no commercial restrictions on selling the game
+- Python is the permanent language choice (career cross-applicability; no C#/C++)
+
+### Porting strategy
+Game logic and rendering are deliberately kept separate:
+- Pure logic (`Player`, `Item`, `Room`, dungeon gen, FOV, floor caching) has no curses dependency and ports untouched
+- Only the rendering layer (`draw`, `draw_panel`, `show_equipment_screen`) gets replaced with pygame equivalents
+- The game loop structure stays the same
+
+### Principles
+- Nail the systems first (mechanics, world gen, story, economy) before worrying about graphics
+- Keep logic and rendering decoupled as features are added
+- Iterate: prove something works in curses, then it's safe to build on
+
 ## Controls
 | Key | Action |
 |---|---|
