@@ -20,9 +20,12 @@ condition — sites can be cleared but the universe keeps expanding.
 ### Key constants
 - `MAP_W = 80`, `MAP_H = 40` — tile grid dimensions
 - `PANEL_W = 20` — right-hand stats panel width (including border)
-- `FOV_RADIUS = 8` — base line-of-sight radius (extended by Mind stat)
+- `FOV_RADIUS = 8` — base line-of-sight radius (extended by Mind + Cartography)
 - `MAX_FLOOR = 10` — depth of Erebus Station (the flagship site)
 - `LOG_LINES = 4` — message log rows at the bottom
+- `POINT_BUY_POINTS = 20` — stat points available at character creation
+- `STARTING_SKILL_POINTS = 4` — free skill points allocated in creation Step 4
+- `SKILL_MAX = 5` — maximum level for any skill
 
 ### Data flow
 1. `make_floor(floor_num, theme_fn, enemy_density, is_final, place_boss)` generates a floor dict
@@ -47,7 +50,9 @@ condition — sites can be cleared but the universe keeps expanding.
 | `show_ship_screen(...)` | Hub: ship status, site list, N/R/Q |
 | `show_nav_computer(...)` | Site selection; deducts fuel on confirm |
 | `make_sites()` | Returns a fresh list of `Site` objects for a new run |
-| `show_character_creation(stdscr)` | 5-step wizard; returns configured `Player` |
+| `show_character_creation(stdscr)` | 6-step wizard; returns configured `Player` |
+| `show_skill_levelup_modal(stdscr, player, points=2)` | Spend skill points after level-up; unspent banked |
+| `show_skills_screen(stdscr, player)` | K key in-game: read-only overview + spend banked SP |
 | `main(stdscr)` | Outer coordinator: character creation → ship ↔ site loop |
 
 ### Sites
@@ -59,9 +64,28 @@ condition — sites can be cleared but the universe keeps expanding.
 | Colony Ruin KE-7 | 6 | 2 | 1.0× | Balanced enemy mix |
 
 ### Player character
-- **Stats** (5): Body, Reflex, Mind, Tech, Presence — set at creation via point-buy
+- **Stats** (5): Body, Reflex, Mind, Tech, Presence — set at creation via point-buy (20 pts)
   - Body → max HP and melee ATK; Reflex → dodge chance; Mind → XP multiplier and FOV radius;
     Tech → ranged ATK bonus; Presence → intimidate chance and shop discounts
+- **Skills** (12, levels 0–5): each skill earned at level-up (2 pts/level) or at creation (4 free pts + background bonus)
+
+| Category | Skills | Mechanical effect |
+|---|---|---|
+| Combat | Melee | +1 melee ATK/lv |
+| Combat | Firearms | +1 ranged ATK/lv |
+| Combat | Tactics | +2% dodge/lv |
+| Technical | Engineering | Traps/tools (future item 2/4) |
+| Technical | Hacking | Terminal depth (future item 3) |
+| Technical | Electronics | Radar/drones (future item 3/4) |
+| Navigation | Pilot | -1 fuel cost per 2 levels |
+| Navigation | Cartography | +1 FOV radius per 2 levels |
+| Navigation | Survival | -1 turn off all status-effect durations/lv |
+| Social | Intimidation | +3% enemy hesitation/lv |
+| Social | Barter | -5% shop prices/lv (floor 40%) |
+| Social | Medicine | +2 HP per heal item use/lv |
+
+- **Background skill bonuses** (pre-seeded at creation, non-removable): Soldier: Melee 1 + Tactics 1; Engineer: Engineering 1 + Electronics 1; Medic: Medicine 1 + Survival 1; Hacker: Hacking 1 + Cartography 1
+- `player.skill_points` — banked unspent SP; shown in panel; spent via K key
 - **Equipment slots** (5): weapon, armor, helmet, gloves, boots
 - **Resources**: HP, XP, credits, fuel
 - **Status effects**: poison, burn, stun — applied by enemies and grenades; ticked each turn
@@ -106,39 +130,15 @@ stair, enemy (×4 behaviour variants), target reticle, terminal, special room fl
 
 Items ordered by dependency and impact. Each item lists what it needs and what it unblocks.
 
-### 1. Character development overhaul
+### ~~1. Character development overhaul~~ ✓ DONE
 
-Replace the current race/class/5-stat system with a richer point-buy + skill tree that gives
-character builds real mechanical identity and supports the game's sci-fi themes.
-
-**Stats (keep, may rename):** Body, Reflex, Mind, Tech, Presence remain the five core
-attributes. They set baseline combat math. Point-buy at creation allocates a larger pool
-(e.g. 20 points, not 10) across a wider range (1–20).
-
-**Skills (new layer):** Skills are distinct from stats and improve through spending skill
-points earned at each level-up. Each skill has levels 0–5; higher levels unlock passives
-and active abilities. Suggested tree:
-
-| Category | Skills | Example effects |
-|---|---|---|
-| Combat | Firearms, Melee, Heavy Weapons | +ranged ATK per level; melee crits; AoE unlocks |
-| Technical | Engineering, Hacking, Electronics | repair items; terminal exploits; drone disable |
-| Navigation | Pilot, Cartography, Survival | fuel efficiency; map reveals; trap resistance |
-| Social | Intimidation, Barter, Persuasion | enemy hesitation; shop price; loot negotiation |
-
-**Level-up flow:** each level grants 1 stat point AND 2 skill points. The current modal
-(`show_levelup_modal`) splits into two steps: pick a stat, then pick a skill to advance.
-
-**Character creation:** the 5-step wizard gains a sixth step (skill selection) where the
-player pre-allocates a small starting pool (e.g. 4 skill points) to establish early identity.
-Race and class modifiers should apply to both stat bases and skill starting levels.
-
-**Downstream effects to wire in once skills exist:**
-- Hacking level gates terminal interactions (item 3)
-- Engineering level gates trap disarming and tool activation (item 4)
-- Pilot level reduces fuel cost or unlocks ship upgrades
-- Cartography level extends `fov_radius` (currently driven by Mind alone)
-- Survival level reduces status-effect duration from hazard tiles (item 2)
+12-skill tree (Melee, Firearms, Tactics, Engineering, Hacking, Electronics, Pilot,
+Cartography, Survival, Intimidation, Barter, Medicine) added on top of the 5-stat system.
+Point-buy raised to 20. Background classes seed 2 skills at level 1. Creation wizard
+expanded to 6 steps with a Skill Allocation step. Level-up grants stat + 2 skill points
+via back-to-back modals; unspent points bank to `player.skill_points`. K key opens
+`show_skills_screen`. All skills mechanically wired (Engineering/Hacking/Electronics
+stubbed pending items 2/3/4).
 
 ---
 
@@ -273,6 +273,7 @@ Game logic and rendering are deliberately kept separate:
 | `<` tile (walk onto) | Ascend one floor |
 | `B` | Back to ship (floor 1 only) |
 | `I` | Equipment screen |
+| `K` | Skills screen (read-only; spend banked SP if any) |
 | `U` | Use first consumable (grenades auto-target nearest visible enemy) |
 | `F` | Fire ranged weapon (opens targeting cursor; Tab cycles targets) |
 | `T` | Open shop (when standing in a Supply Depot) |

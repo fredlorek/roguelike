@@ -75,8 +75,10 @@ class Item:
         if self.effect in ('poison', 'burn', 'stun'):
             return f"Threw {self.name}."   # enemy targeting handled in main loop
         if self.heal:
-            restored = min(self.heal, player.max_hp - player.hp)
-            player.hp = min(player.max_hp, player.hp + self.heal)
+            medicine   = getattr(player, 'skills', {}).get('medicine', 0)
+            total_heal = self.heal + medicine * 2
+            restored   = min(total_heal, player.max_hp - player.hp)
+            player.hp  = min(player.max_hp, player.hp + total_heal)
             return f"Used {self.name}: +{restored} HP."
         return f"Used {self.name}."
 
@@ -429,7 +431,29 @@ STAT_LABELS      = ('Body', 'Reflex', 'Mind', 'Tech', 'Presence')
 STAT_BASE        = 5
 STAT_MIN         = 1
 STAT_MAX         = 15
-POINT_BUY_POINTS = 10
+POINT_BUY_POINTS      = 20          # was 10
+STARTING_SKILL_POINTS = 4           # free skill points allocated in Step 4 of creation
+SKILL_MAX             = 5           # maximum level for any skill
+
+SKILLS = {
+    'melee':        {'name': 'Melee',        'cat': 'Combat',     'desc': 'Close-quarters combat.',           'effect': '+1 ATK/lv'},
+    'firearms':     {'name': 'Firearms',     'cat': 'Combat',     'desc': 'Ranged weapon proficiency.',       'effect': '+1 rATK/lv'},
+    'tactics':      {'name': 'Tactics',      'cat': 'Combat',     'desc': 'Tactical positioning and timing.', 'effect': '+2% dodge/lv'},
+    'engineering':  {'name': 'Engineering',  'cat': 'Technical',  'desc': 'Repair, craft, disarm traps.',     'effect': 'Traps/tools (future)'},
+    'hacking':      {'name': 'Hacking',      'cat': 'Technical',  'desc': 'Terminal intrusion depth.',        'effect': 'Terminals (future)'},
+    'electronics':  {'name': 'Electronics',  'cat': 'Technical',  'desc': 'Sensor arrays and drone control.', 'effect': 'Radar (future)'},
+    'pilot':        {'name': 'Pilot',        'cat': 'Navigation', 'desc': 'Ship handling and navigation.',    'effect': '-1 fuel/2 lv'},
+    'cartography':  {'name': 'Cartography',  'cat': 'Navigation', 'desc': 'Spatial awareness and mapping.',   'effect': '+1 FOV/2 lv'},
+    'survival':     {'name': 'Survival',     'cat': 'Navigation', 'desc': 'Hazard resistance and endurance.', 'effect': '-1 effect turn/lv'},
+    'intimidation': {'name': 'Intimidation', 'cat': 'Social',     'desc': 'Projecting dominance and fear.',   'effect': '+3% hesitate/lv'},
+    'barter':       {'name': 'Barter',       'cat': 'Social',     'desc': 'Negotiating prices and deals.',    'effect': '-5% shop price/lv'},
+    'medicine':     {'name': 'Medicine',     'cat': 'Medicine',   'desc': 'First aid and field surgery.',     'effect': '+2 HP/use/lv'},
+}
+
+SKILL_ORDER = ['melee', 'firearms', 'tactics',
+               'engineering', 'hacking', 'electronics',
+               'pilot', 'cartography', 'survival',
+               'intimidation', 'barter', 'medicine']
 
 EFFECT_DAMAGE   = {'poison': 2, 'burn': 3}    # HP lost per turn
 EFFECT_DURATION = {'poison': 4, 'burn': 3, 'stun': 1}
@@ -455,13 +479,17 @@ RACES = {
 
 CLASSES = {
     'Soldier':  {'desc': 'Combat specialist. Excels in physical confrontation.',
-                 'mods': {'body': 3, 'reflex': 2, 'mind': -1, 'tech': -1, 'presence': -1}},
+                 'mods': {'body': 3, 'reflex': 2, 'mind': -1, 'tech': -1, 'presence': -1},
+                 'skills': {'melee': 1, 'tactics': 1}},
     'Engineer': {'desc': 'Tech expert. Builds, repairs, and improvises solutions.',
-                 'mods': {'body': -1, 'reflex': -1, 'mind': 2, 'tech': 3, 'presence': -1}},
+                 'mods': {'body': -1, 'reflex': -1, 'mind': 2, 'tech': 3, 'presence': -1},
+                 'skills': {'engineering': 1, 'electronics': 1}},
     'Medic':    {'desc': 'Field medic and negotiator. Keeps the team alive.',
-                 'mods': {'body': -2, 'reflex': -1, 'mind': 2, 'tech': 1, 'presence': 3}},
+                 'mods': {'body': -2, 'reflex': -1, 'mind': 2, 'tech': 1, 'presence': 3},
+                 'skills': {'medicine': 1, 'survival': 1}},
     'Hacker':   {'desc': 'Systems infiltrator. Exploits technology and environments.',
-                 'mods': {'body': -2, 'reflex': 2, 'mind': 1, 'tech': 3, 'presence': -2}},
+                 'mods': {'body': -2, 'reflex': 2, 'mind': 1, 'tech': 3, 'presence': -2},
+                 'skills': {'hacking': 1, 'cartography': 1}},
 }
 
 
@@ -472,7 +500,7 @@ class Player:
                    'helmet': 'Helmet', 'gloves': 'Gloves', 'boots': 'Boots'}
 
     def __init__(self, name='Unknown', race='Human', char_class='Soldier',
-                 body=5, reflex=5, mind=5, tech=5, presence=5):
+                 body=5, reflex=5, mind=5, tech=5, presence=5, skills=None):
         self.name       = name
         self.race       = race
         self.char_class = char_class
@@ -490,11 +518,13 @@ class Player:
         self.credits    = 0
         self.fuel       = 3
         self.active_effects = {}   # effect_name -> remaining_turns
+        self.skills       = dict(skills) if skills else {k: 0 for k in SKILL_ORDER}
+        self.skill_points = 0   # unspent points; accumulate until spent
 
     @property
     def atk(self):
         weapon_bonus = sum(i.atk for i in self.equipment.values() if i)
-        return 1 + max(0, (self.body - 5) // 2) + weapon_bonus
+        return 1 + max(0, (self.body - 5) // 2) + weapon_bonus + self.skills.get('melee', 0)
         # body=5 → 1 (same as before); body=7 → 2; body=10 → 3
 
     @property
@@ -503,13 +533,13 @@ class Player:
 
     @property
     def dodge_chance(self):
-        """Percent chance to dodge an attack (0–40%). Driven by reflex."""
-        return max(0, (self.reflex - 5) * 4)
+        """Percent chance to dodge an attack. Driven by reflex + Tactics skill."""
+        return max(0, (self.reflex - 5) * 4) + self.skills.get('tactics', 0) * 2
 
     @property
     def ranged_atk(self):
-        """ATK for ranged weapons, with tech bonus on top of base ATK."""
-        return self.atk + max(0, (self.tech - 5) // 2)
+        """ATK for ranged weapons, with tech bonus + Firearms skill on top of base ATK."""
+        return self.atk + max(0, (self.tech - 5) // 2) + self.skills.get('firearms', 0)
 
     @property
     def xp_gain_multiplier(self):
@@ -518,8 +548,13 @@ class Player:
 
     @property
     def fov_radius(self):
-        """FOV radius extended by mind stat (mind=5 → 8, mind=8 → 9, mind=11 → 10)."""
-        return FOV_RADIUS + max(0, (self.mind - 5) // 3)
+        """FOV radius extended by mind stat + Cartography skill."""
+        return FOV_RADIUS + max(0, (self.mind - 5) // 3) + self.skills.get('cartography', 0) // 2
+
+    @property
+    def fuel_discount(self):
+        """Fuel cost reduction from Pilot skill (lv0-1: 0, lv2-3: 1, lv4-5: 2)."""
+        return self.skills.get('pilot', 0) // 2
 
     @property
     def xp_next(self):
@@ -958,8 +993,12 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
         (f"CR:   {player.credits}",                        panel_attr),
         (f"Fuel: {player.fuel}",                           panel_attr),
         (None, 0),                                          # blank
-        ("[I] Equipment",                                   panel_attr),
+        ("[I] Equip  [K] Skills",                          panel_attr),
     ]
+
+    if player.skill_points:
+        lines.insert(-1, (f"SP:   {player.skill_points}",
+                          curses.color_pair(COLOR_PLAYER) | curses.A_BOLD))
 
     if player.active_effects:
         abbr = {'poison': 'Psn', 'burn': 'Brn', 'stun': 'Stn'}
@@ -1094,7 +1133,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                max_floor=max_floor, floor_name=theme['name'])
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  U:use  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  U:use  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -1333,7 +1372,8 @@ def show_shop_screen(stdscr, player, stock):
         rows_content.append(("", None))
 
         for idx, (item, base_price) in enumerate(stock):
-            price = int(base_price * max(0.5, 1.0 - (player.presence - 5) * 0.05))
+            barter_discount = player.skills.get('barter', 0) * 0.05
+            price = int(base_price * max(0.4, 1.0 - (player.presence - 5) * 0.05 - barter_discount))
             stat  = item.stat_str()
             text  = f"  {item.name:<20} [{item.slot:<6}] {stat:<14} {price:>3} cr"
             rows_content.append((text[:BOX_W - 2], idx))
@@ -1429,7 +1469,8 @@ def show_shop_screen(stdscr, player, stock):
                 _, sidx  = rows_content[flat_idx]
                 if sidx is not None:
                     item, base_price = stock[sidx]
-                    price = int(base_price * max(0.5, 1.0 - (player.presence - 5) * 0.05))
+                    barter_discount = player.skills.get('barter', 0) * 0.05
+                    price = int(base_price * max(0.4, 1.0 - (player.presence - 5) * 0.05 - barter_discount))
                     if player.credits < price:
                         return f"Need {price} cr, have {player.credits} cr."
                     if len(player.inventory) >= MAX_INVENTORY:
@@ -1707,14 +1748,16 @@ def show_character_creation(stdscr):
             pass
 
     def compute_base(race_name, class_name):
-        """Apply race + class mods to STAT_BASE, clamped to STAT_MIN."""
+        """Apply race + class mods to STAT_BASE, clamped to STAT_MIN.
+        Also returns background skill allocations from the class."""
         rmods = RACES[race_name]['mods']
         cmods = CLASSES[class_name]['mods']
         result = {}
         for s in STATS:
             val = STAT_BASE + rmods.get(s, 0) + cmods.get(s, 0)
             result[s] = max(STAT_MIN, val)
-        return result
+        bg_skills = dict(CLASSES[class_name].get('skills', {}))
+        return result, bg_skills
 
     def mod_str(mods):
         parts = []
@@ -1724,12 +1767,14 @@ def show_character_creation(stdscr):
                 parts.append(f"{label[0]}{v:+d}")
         return '  '.join(parts) if parts else '(no modifiers)'
 
-    step       = 0
-    name       = ''
-    race_idx   = 0
-    class_idx  = 0
-    alloc      = {s: 0 for s in STATS}
-    stat_cursor = 0  # index into STATS for point-buy step
+    step        = 0
+    name        = ''
+    race_idx    = 0
+    class_idx   = 0
+    alloc       = {s: 0 for s in STATS}
+    stat_cursor  = 0   # index into STATS for point-buy step
+    skill_alloc  = {k: 0 for k in SKILL_ORDER}   # extra free points beyond background
+    skill_cursor = 0   # index into SKILL_ORDER for skill allocation step
 
     while True:
         term_h, term_w = stdscr.getmaxyx()
@@ -1782,9 +1827,9 @@ def show_character_creation(stdscr):
                 alloc = {s: 0 for s in STATS}   # reset alloc on race change
                 step  = 2
 
-        # ── Step 2: Class ────────────────────────────────────────────────────
+        # ── Step 2: Background ───────────────────────────────────────────────
         elif step == 2:
-            title = "CHARACTER CREATION — Class"
+            title = "CHARACTER CREATION — Background"
             safe_addstr(1, 2, title, header_attr)
             safe_addstr(3, 2, "W/S: navigate   Enter: select   Esc: back", panel_attr)
 
@@ -1807,15 +1852,16 @@ def show_character_creation(stdscr):
             elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
                 class_idx = min(len(class_names) - 1, class_idx + 1)
             elif key in (curses.KEY_ENTER, 10, 13):
-                alloc = {s: 0 for s in STATS}   # reset alloc on class change
-                step  = 3
+                alloc       = {s: 0 for s in STATS}      # reset alloc on class change
+                skill_alloc = {k: 0 for k in SKILL_ORDER}  # reset skill alloc
+                step = 3
 
         # ── Step 3: Point Buy ─────────────────────────────────────────────────
         elif step == 3:
-            rname   = race_names[race_idx]
-            cname   = class_names[class_idx]
-            base    = compute_base(rname, cname)
-            remain  = POINT_BUY_POINTS - sum(alloc.values())
+            rname      = race_names[race_idx]
+            cname      = class_names[class_idx]
+            base, _bg  = compute_base(rname, cname)
+            remain     = POINT_BUY_POINTS - sum(alloc.values())
 
             title = "CHARACTER CREATION — Distribute Points"
             safe_addstr(1, 2, title, header_attr)
@@ -1854,34 +1900,112 @@ def show_character_creation(stdscr):
                 if alloc[s] > 0:
                     alloc[s] -= 1
             elif key in (curses.KEY_ENTER, 10, 13):
+                skill_alloc = {k: 0 for k in SKILL_ORDER}   # reset skill alloc entering step 4
                 step = 4
 
-        # ── Step 4: Confirm ────────────────────────────────────────────────────
+        # ── Step 4: Skill Allocation ──────────────────────────────────────────
         elif step == 4:
-            rname  = race_names[race_idx]
-            cname  = class_names[class_idx]
-            base   = compute_base(rname, cname)
-            final  = {s: base[s] + alloc[s] for s in STATS}
-            max_hp = 20 + final['body'] * 2
+            rname      = race_names[race_idx]
+            cname      = class_names[class_idx]
+            _base, bg_skills = compute_base(rname, cname)
+            remaining_sp = STARTING_SKILL_POINTS - sum(skill_alloc.values())
 
-            title = "CHARACTER CREATION — Confirm"
+            title = "CHARACTER CREATION — Allocate Skills"
             safe_addstr(1, 2, title, header_attr)
-            safe_addstr(3, 2, f"Name:   {name}", panel_attr)
-            safe_addstr(4, 2, f"Race:   {rname}", panel_attr)
-            safe_addstr(5, 2, f"Class:  {cname}", panel_attr)
-            safe_addstr(7, 2, "STATS", header_attr)
+            safe_addstr(3, 2,
+                f"Free points: {remaining_sp}   "
+                "W/S: select   D: add   A: remove (free only)   Enter: continue   Esc: back",
+                panel_attr)
 
-            for i, (s, label) in enumerate(zip(STATS, STAT_LABELS)):
-                safe_addstr(8 + i, 4, f"{label:<10} {final[s]:>2}", panel_attr)
-
-            safe_addstr(8 + len(STATS) + 1, 2, f"Max HP: {max_hp}", panel_attr)
-            safe_addstr(8 + len(STATS) + 3, 2, "Enter: begin game   Esc: back", panel_attr)
+            # Group skills by category for display
+            cur_cat = None
+            row = 5
+            for i, sk in enumerate(SKILL_ORDER):
+                sdata = SKILLS[sk]
+                cat   = sdata['cat']
+                if cat != cur_cat:
+                    safe_addstr(row, 2, cat.upper(), panel_attr | curses.A_BOLD)
+                    row += 1
+                    cur_cat = cat
+                bg_lv    = bg_skills.get(sk, 0)
+                extra_lv = skill_alloc.get(sk, 0)
+                total_lv = bg_lv + extra_lv
+                bar      = '█' * total_lv + '░' * (SKILL_MAX - total_lv)
+                attr     = sel_attr if i == skill_cursor else panel_attr
+                prefix   = '> ' if i == skill_cursor else '  '
+                line = f"{prefix}{sdata['name']:<14} {bar}  {total_lv}/{SKILL_MAX}  {sdata['effect']}"
+                safe_addstr(row, 2, line[:term_w - 4], attr)
+                if bg_lv > 0:
+                    safe_addstr(row, 2 + len(prefix) + 14 + 1 + bg_lv - 1, '',  # just mark bg portion
+                                panel_attr)  # background skills already filled by char
+                row += 1
 
             stdscr.refresh()
             key = stdscr.getch()
 
             if key == 27:
                 step = 3
+            elif key in (curses.KEY_UP, ord('w'), ord('W')):
+                skill_cursor = (skill_cursor - 1) % len(SKILL_ORDER)
+            elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
+                skill_cursor = (skill_cursor + 1) % len(SKILL_ORDER)
+            elif key in (curses.KEY_RIGHT, ord('d'), ord('D')):
+                sk       = SKILL_ORDER[skill_cursor]
+                bg_lv    = bg_skills.get(sk, 0)
+                total_lv = bg_lv + skill_alloc.get(sk, 0)
+                if remaining_sp > 0 and total_lv < SKILL_MAX:
+                    skill_alloc[sk] = skill_alloc.get(sk, 0) + 1
+            elif key in (curses.KEY_LEFT, ord('a'), ord('A')):
+                sk = SKILL_ORDER[skill_cursor]
+                if skill_alloc.get(sk, 0) > 0:
+                    skill_alloc[sk] -= 1
+            elif key in (curses.KEY_ENTER, 10, 13):
+                step = 5
+
+        # ── Step 5: Confirm ────────────────────────────────────────────────────
+        elif step == 5:
+            rname      = race_names[race_idx]
+            cname      = class_names[class_idx]
+            base, bg_skills = compute_base(rname, cname)
+            final  = {s: base[s] + alloc[s] for s in STATS}
+            max_hp = 20 + final['body'] * 2
+            # Build final skills: background + free allocations
+            final_skills = {k: 0 for k in SKILL_ORDER}
+            for k, v in bg_skills.items():
+                final_skills[k] = final_skills.get(k, 0) + v
+            for k, v in skill_alloc.items():
+                final_skills[k] = final_skills.get(k, 0) + v
+
+            title = "CHARACTER CREATION — Confirm"
+            safe_addstr(1, 2, title, header_attr)
+            safe_addstr(3, 2, f"Name:       {name}", panel_attr)
+            safe_addstr(4, 2, f"Race:       {rname}", panel_attr)
+            safe_addstr(5, 2, f"Background: {cname}", panel_attr)
+            safe_addstr(7, 2, "STATS", header_attr)
+
+            for i, (s, label) in enumerate(zip(STATS, STAT_LABELS)):
+                safe_addstr(8 + i, 4, f"{label:<10} {final[s]:>2}", panel_attr)
+
+            safe_addstr(8 + len(STATS) + 1, 2, f"Max HP: {max_hp}", panel_attr)
+
+            # Show non-zero skills
+            nz_skills = [(k, v) for k, v in final_skills.items() if v > 0]
+            if nz_skills:
+                safe_addstr(8 + len(STATS) + 3, 2, "SKILLS", header_attr)
+                for si, (sk, lv) in enumerate(nz_skills):
+                    safe_addstr(8 + len(STATS) + 4 + si, 4,
+                                f"{SKILLS[sk]['name']:<14} {lv}", panel_attr)
+                conf_row = 8 + len(STATS) + 5 + len(nz_skills)
+            else:
+                conf_row = 8 + len(STATS) + 3
+
+            safe_addstr(conf_row, 2, "Enter: begin game   Esc: back", panel_attr)
+
+            stdscr.refresh()
+            key = stdscr.getch()
+
+            if key == 27:
+                step = 4
             elif key in (curses.KEY_ENTER, 10, 13):
                 return Player(
                     name=name,
@@ -1892,11 +2016,15 @@ def show_character_creation(stdscr):
                     mind=final['mind'],
                     tech=final['tech'],
                     presence=final['presence'],
+                    skills=final_skills,
                 )
 
 
 def apply_effect(entity, effect, turns):
-    """Apply or refresh a status effect (keeps max remaining turns)."""
+    """Apply or refresh a status effect (keeps max remaining turns).
+    Player's Survival skill reduces duration by 1 per skill level (min 1)."""
+    if hasattr(entity, 'skills'):
+        turns = max(1, turns - entity.skills.get('survival', 0))
     entity.active_effects[effect] = max(entity.active_effects.get(effect, 0), turns)
 
 
@@ -1916,6 +2044,214 @@ def tick_effects(entity, label):
         del entity.active_effects[e]
         msgs.append(f"{label} is no longer affected by {e}.")
     return msgs
+
+
+def show_skill_levelup_modal(stdscr, player, points=2):
+    """Modal for spending skill points after levelling up.
+    points: how many the player may spend now; any unspent are banked to player.skill_points."""
+    BOX_W      = 56
+    panel_attr = curses.color_pair(COLOR_PANEL)
+    hi_attr    = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+    head_attr  = panel_attr | curses.A_BOLD
+
+    remaining  = points
+    allocated  = {k: 0 for k in SKILL_ORDER}   # points spent THIS modal (removable)
+    cursor     = 0
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        # BOX_H: title row + blank + 12 skill rows + blank + footer + borders = 18
+        BOX_H  = 3 + len(SKILL_ORDER) + 3
+        box_y  = max(0, (term_h - BOX_H) // 2)
+        box_x  = max(0, (term_w - BOX_W) // 2)
+
+        # Border
+        try:
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+        except curses.error:
+            pass
+        for ry in range(1, BOX_H - 1):
+            try:
+                stdscr.addch(box_y + ry, box_x, curses.ACS_VLINE, panel_attr)
+                stdscr.addch(box_y + ry, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            except curses.error:
+                pass
+        try:
+            stdscr.addch(box_y + BOX_H - 1, box_x, curses.ACS_LLCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y + BOX_H - 1, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y + BOX_H - 1, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        # Title
+        title = f"  SKILL POINTS — {remaining} to spend  "
+        try:
+            stdscr.addstr(box_y + 1, box_x + 1, title[:BOX_W - 2].center(BOX_W - 2), head_attr)
+        except curses.error:
+            pass
+
+        # Skill rows
+        for i, sk in enumerate(SKILL_ORDER):
+            row      = box_y + 3 + i
+            sdata    = SKILLS[sk]
+            cur_lv   = player.skills.get(sk, 0) + allocated.get(sk, 0)
+            bar      = '█' * cur_lv + '░' * (SKILL_MAX - cur_lv)
+            prefix   = '>' if i == cursor else ' '
+            attr     = hi_attr if i == cursor else panel_attr
+            line     = f" {prefix} {sdata['name']:<14} {bar}  {cur_lv}/{SKILL_MAX}  {sdata['effect']}"
+            try:
+                stdscr.addstr(row, box_x + 1, line[:BOX_W - 2].ljust(BOX_W - 2), attr)
+            except curses.error:
+                pass
+
+        # Footer
+        footer = "  W/S:select  D:add  A:remove  Enter:done  "
+        try:
+            stdscr.addstr(box_y + BOX_H - 2, box_x + 1, footer[:BOX_W - 2].center(BOX_W - 2),
+                          panel_attr)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key in (ord('w'), ord('W'), curses.KEY_UP):
+            cursor = (cursor - 1) % len(SKILL_ORDER)
+        elif key in (ord('s'), ord('S'), curses.KEY_DOWN):
+            cursor = (cursor + 1) % len(SKILL_ORDER)
+        elif key in (ord('d'), ord('D'), curses.KEY_RIGHT):
+            sk     = SKILL_ORDER[cursor]
+            cur_lv = player.skills.get(sk, 0) + allocated.get(sk, 0)
+            if remaining > 0 and cur_lv < SKILL_MAX:
+                allocated[sk] = allocated.get(sk, 0) + 1
+                remaining    -= 1
+        elif key in (ord('a'), ord('A'), curses.KEY_LEFT):
+            sk = SKILL_ORDER[cursor]
+            if allocated.get(sk, 0) > 0:
+                allocated[sk] -= 1
+                remaining     += 1
+        elif key in (ord('\n'), curses.KEY_ENTER, 10, 13, 27):
+            # Apply allocations
+            for sk, lv in allocated.items():
+                player.skills[sk] = player.skills.get(sk, 0) + lv
+            # Bank unspent points
+            player.skill_points += remaining
+            break
+
+
+def show_skills_screen(stdscr, player):
+    """Read-only skills overview; allows spending banked skill_points if any."""
+    BOX_W      = 58
+    panel_attr = curses.color_pair(COLOR_PANEL)
+    hi_attr    = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+    head_attr  = panel_attr | curses.A_BOLD
+
+    cursor  = 0
+    can_spend = player.skill_points > 0
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+
+        # Count rows needed: category headers + skill rows
+        rows_content = []   # (text, attr, skill_key_or_None)
+        cur_cat = None
+        for sk in SKILL_ORDER:
+            sdata = SKILLS[sk]
+            cat   = sdata['cat']
+            if cat != cur_cat:
+                rows_content.append((cat.upper(), head_attr, None))
+                cur_cat = cat
+            lv   = player.skills.get(sk, 0)
+            bar  = '█' * lv + '░' * (SKILL_MAX - lv)
+            eff  = sdata['effect'] if lv > 0 else '—'
+            line = f"  {sdata['name']:<14} {bar}  {lv}/{SKILL_MAX}   {eff}"
+            attr = hi_attr if (can_spend and SKILL_ORDER.index(sk) == cursor) else panel_attr
+            rows_content.append((line, attr, sk))
+
+        BOX_H  = len(rows_content) + 4   # title + content + blank + footer + borders
+        box_y  = max(0, (term_h - BOX_H) // 2)
+        box_x  = max(0, (term_w - BOX_W) // 2)
+
+        # Border
+        try:
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+        except curses.error:
+            pass
+        for ry in range(1, BOX_H - 1):
+            try:
+                stdscr.addch(box_y + ry, box_x, curses.ACS_VLINE, panel_attr)
+                stdscr.addch(box_y + ry, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            except curses.error:
+                pass
+        try:
+            stdscr.addch(box_y + BOX_H - 1, box_x, curses.ACS_LLCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y + BOX_H - 1, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y + BOX_H - 1, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        # Title with SP count
+        sp_str = f"[SP: {player.skill_points} unspent]" if player.skill_points else ""
+        title  = f"  SKILLS  {sp_str}"
+        try:
+            stdscr.addstr(box_y + 1, box_x + 1, title[:BOX_W - 2].ljust(BOX_W - 2), head_attr)
+        except curses.error:
+            pass
+
+        # Content rows
+        for ri, (text, attr, sk) in enumerate(rows_content):
+            row = box_y + 2 + ri
+            try:
+                stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
+                stdscr.addstr(row, box_x + 1, text[:BOX_W - 2], attr)
+            except curses.error:
+                pass
+
+        # Footer
+        if can_spend:
+            footer = "  W/S:select  D:spend point  K/Esc:close  "
+        else:
+            footer = "  K/Esc:close  "
+        try:
+            stdscr.addstr(box_y + BOX_H - 2, box_x + 1, footer[:BOX_W - 2].center(BOX_W - 2),
+                          panel_attr | curses.A_DIM)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key in (27, ord('k'), ord('K')):
+            break
+        if can_spend:
+            if key in (ord('w'), ord('W'), curses.KEY_UP):
+                # Navigate only to skill rows
+                sk_indices = [i for i, (_, _, s) in enumerate(rows_content) if s is not None]
+                cur_sk_pos = next((p for p, idx in enumerate(sk_indices)
+                                   if SKILL_ORDER.index(rows_content[idx][2]) == cursor), 0)
+                if cur_sk_pos > 0:
+                    cursor = SKILL_ORDER.index(rows_content[sk_indices[cur_sk_pos - 1]][2])
+            elif key in (ord('s'), ord('S'), curses.KEY_DOWN):
+                sk_indices = [i for i, (_, _, s) in enumerate(rows_content) if s is not None]
+                cur_sk_pos = next((p for p, idx in enumerate(sk_indices)
+                                   if SKILL_ORDER.index(rows_content[idx][2]) == cursor), 0)
+                if cur_sk_pos < len(sk_indices) - 1:
+                    cursor = SKILL_ORDER.index(rows_content[sk_indices[cur_sk_pos + 1]][2])
+            elif key in (ord('d'), ord('D')):
+                sk    = SKILL_ORDER[cursor]
+                cur_lv = player.skills.get(sk, 0)
+                if player.skill_points > 0 and cur_lv < SKILL_MAX:
+                    player.skills[sk]  = cur_lv + 1
+                    player.skill_points -= 1
+                    can_spend = player.skill_points > 0
 
 
 def show_levelup_modal(stdscr, player):
@@ -2026,7 +2362,7 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
     # Updated as enemies move so later enemies see the current layout.
     occupied = set(enemies.keys())
 
-    intimidate_chance = max(0, (player.presence - 5) * 3)
+    intimidate_chance = max(0, (player.presence - 5) * 3 + player.skills.get('intimidation', 0) * 3)
 
     def _random_walk(enemy, epos):
         """Try to move enemy one step randomly. Updates enemies/occupied in place."""
@@ -2297,6 +2633,9 @@ def run_site(stdscr, site, player):
             if result:
                 log.appendleft(result)
 
+        if key in (ord('k'), ord('K')):
+            show_skills_screen(stdscr, player)
+
         if key in (ord('u'), ord('U')):
             consumables = [i for i in player.inventory if i.consumable]
             if consumables:
@@ -2380,6 +2719,7 @@ def run_site(stdscr, site, player):
                                     log.appendleft(lvl_msg)
                                 for _ in range(n_lv):
                                     show_levelup_modal(stdscr, player)
+                                    show_skill_levelup_modal(stdscr, player, points=2)
                                 if enemy.boss:
                                     draw(stdscr, tiles, px, py, player, visible, explored,
                                          items_on_map, stair_up, stair_down, current_floor,
@@ -2431,6 +2771,7 @@ def run_site(stdscr, site, player):
                             log.appendleft(lvl_msg)
                         for _ in range(n_lv):
                             show_levelup_modal(stdscr, player)
+                            show_skill_levelup_modal(stdscr, player, points=2)
                         if enemy.boss:
                             draw(stdscr, tiles, px, py, player, visible, explored,
                                  items_on_map, stair_up, stair_down, current_floor,
@@ -2451,6 +2792,7 @@ def run_site(stdscr, site, player):
                     n_lv, _ = player.gain_xp(1)
                     for _ in range(n_lv):
                         show_levelup_modal(stdscr, player)
+                        show_skill_levelup_modal(stdscr, player, points=2)
                     if (px, py) in items_on_map:
                         picked = items_on_map[(px, py)]
                         if player.pickup(picked):
@@ -2472,6 +2814,7 @@ def run_site(stdscr, site, player):
                                     log.appendleft(lvl_msg)
                                 for _ in range(n_lv):
                                     show_levelup_modal(stdscr, player)
+                                    show_skill_levelup_modal(stdscr, player, points=2)
                         else:
                             log.appendleft(f"[already read] {t.title[:38]}")
 
@@ -2721,7 +3064,7 @@ def main(stdscr):
             if site is None:
                 continue   # player pressed Esc
 
-            player.fuel -= site.fuel_cost
+            player.fuel -= max(0, site.fuel_cost - player.fuel_discount)
             result = run_site(stdscr, site, player)
 
             if result == 'dead':
