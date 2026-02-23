@@ -14,7 +14,8 @@ FLOOR   = '.'
 PLAYER  = '@'
 PANEL_W   = 20  # width of the right-hand stats panel (including border)
 LOG_LINES = 4   # number of message log rows at the bottom
-MAX_FLOOR = 10  # final floor; win condition triggers here
+MAX_FLOOR     = 10  # final floor; win condition triggers here
+MAX_INVENTORY = 12  # max items in unequipped inventory
 
 
 class Room:
@@ -75,6 +76,18 @@ ITEM_TEMPLATES = [
     Item('Med-Patch',      'use',    char='+', consumable=True, heal=10),
     Item('Medkit',         'use',    char='+', consumable=True, heal=25),
     Item('Nano-Inject',    'use',    char='+', consumable=True, heal=15),
+    # Helmets — defence
+    Item('Tactical Visor', 'helmet', dfn=1, char='^'),
+    Item('Combat Helm',    'helmet', dfn=2, char='^'),
+    Item('Siege Cranial',  'helmet', dfn=3, char='^'),
+    # Gloves — attack
+    Item('Grip Wraps',       'gloves', atk=1, char=')'),
+    Item('Combat Gauntlets', 'gloves', atk=2, char=')'),
+    Item('Power Fists',      'gloves', atk=3, char=')'),
+    # Boots — defence
+    Item('Composite Boots', 'boots', dfn=1, char='u'),
+    Item('Hardened Treads', 'boots', dfn=2, char='u'),
+    Item('Exo-Boots',       'boots', dfn=3, char='u'),
 ]
 
 LORE_POOL = [
@@ -355,7 +368,9 @@ CLASSES = {
 
 class Player:
     XP_PER_LEVEL = 100
-    SLOTS = ('weapon', 'armor')
+    SLOTS = ('weapon', 'armor', 'helmet', 'gloves', 'boots')
+    SLOT_LABELS = {'weapon': 'Weapon', 'armor': 'Armor',
+                   'helmet': 'Helmet', 'gloves': 'Gloves', 'boots': 'Boots'}
 
     def __init__(self, name='Unknown', race='Human', char_class='Soldier',
                  body=5, reflex=5, mind=5, tech=5, presence=5):
@@ -372,7 +387,7 @@ class Player:
         self.level      = 1
         self.xp         = 0
         self.inventory  = []
-        self.equipment  = {'weapon': None, 'armor': None}
+        self.equipment  = {s: None for s in self.SLOTS}
 
     @property
     def atk(self):
@@ -400,7 +415,10 @@ class Player:
         return f"Level up! You are now level {self.level}. Full HP restored." if leveled else None
 
     def pickup(self, item):
+        if len(self.inventory) >= MAX_INVENTORY:
+            return False
         self.inventory.append(item)
+        return True
 
     def equip(self, item):           # item must be in inventory
         old = self.equipment[item.slot]
@@ -868,121 +886,145 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
     stdscr.refresh()
 
 
-def show_equipment_screen(stdscr, player):
+def show_equipment_screen(stdscr, player, px=0, py=0, items_on_map=None):
     """Modal overlay for managing inventory and equipment."""
-    BOX_W = 50
+    BOX_W       = 58
+    MAX_VISIBLE = 18   # max content rows shown at once (excluding borders/footer)
+
+    cur_sel    = getattr(show_equipment_screen, '_cursor', 0)
+    scroll_off = 0
 
     while True:
         term_h, term_w = stdscr.getmaxyx()
 
-        # Build selectable entries: each is (label, action_type, payload)
-        # action_type: 'equip' (inventory item) or 'unequip' (slot name)
-        entries = []
+        # ── Build entry list and rows_content ──────────────────────────────
+        entries      = []   # (action, payload)
+        rows_content = []   # (text, entry_idx or None)
 
-        for slot in Player.SLOTS:
-            item = player.equipment[slot]
-            if item:
-                entries.append(('unequip', slot))
-            else:
-                entries.append(None)  # not selectable
-
-        for item in player.inventory:
-            if item.consumable:
-                entries.append(('use', item))
-            else:
-                entries.append(('equip', item))
-
-        # Flatten: section headers are non-selectable, item rows are selectable
-        # We track which flat row index corresponds to which entry index
-        rows_content = []   # list of (text, selectable_idx_or_None)
-
+        # EQUIPPED section
         rows_content.append(("  EQUIPPED", None))
         rows_content.append(("", None))
-        for i, slot in enumerate(Player.SLOTS):
-            item = player.equipment[slot]
+        for slot in Player.SLOTS:
+            item  = player.equipment[slot]
+            label = Player.SLOT_LABELS[slot]
             if item:
-                label = f"  {slot.capitalize():<8}: {item.name} ({item.stat_str()})"
-                rows_content.append((label, i))
+                text = f"  {label:<8}: {item.name} ({item.stat_str()})"
+                rows_content.append((text, len(entries)))
+                entries.append(('unequip', slot))
             else:
-                label = f"  {slot.capitalize():<8}: (empty)"
-                rows_content.append((label, None))
+                rows_content.append((f"  {label:<8}: (empty)", None))
+
+        # INVENTORY section
         rows_content.append(("", None))
-        rows_content.append(("  INVENTORY", None))
+        rows_content.append((f"  INVENTORY  ({len(player.inventory)}/{MAX_INVENTORY})", None))
         rows_content.append(("", None))
 
-        base_inv = len(Player.SLOTS)  # offset into entries for inventory items
         if player.inventory:
-            for j, item in enumerate(player.inventory):
-                label = f"  {item.name} [{item.slot}] {item.stat_str()}"
-                rows_content.append((label, base_inv + j))
+            for item in player.inventory:
+                if not item.consumable:
+                    # delta vs currently equipped in same slot
+                    eq = player.equipment.get(item.slot)
+                    if eq:
+                        datk  = item.atk - eq.atk
+                        ddfn  = item.dfn - eq.dfn
+                        parts = []
+                        if datk: parts.append(f"ATK{datk:+d}")
+                        if ddfn: parts.append(f"DEF{ddfn:+d}")
+                        cmp = f" [{', '.join(parts)}]" if parts else " [=]"
+                    else:
+                        cmp = ""
+                    text = f"  {item.name} [{item.slot}] {item.stat_str()}{cmp}"
+                else:
+                    text = f"  {item.name} [use] {item.stat_str()}"
+                rows_content.append((text, len(entries)))
+                entries.append(('use' if item.consumable else 'equip', item))
         else:
             rows_content.append(("  (empty)", None))
 
-        rows_content.append(("", None))
-        rows_content.append(("  Enter: equip/unequip  |  Esc/I: close", None))
+        # ── Cursor clamping ─────────────────────────────────────────────────
+        selectable_rows = [i for i, (_, eidx) in enumerate(rows_content)
+                           if eidx is not None]
+        if selectable_rows:
+            cur_sel = max(0, min(cur_sel, len(selectable_rows) - 1))
+        else:
+            cur_sel = 0
 
-        # Collect selectable row indices (flat row positions that have an entry)
-        selectable_rows = [i for i, (_, eidx) in enumerate(rows_content) if eidx is not None]
+        # Scroll to keep selected row visible
+        if selectable_rows:
+            sel_flat = selectable_rows[cur_sel]
+            if sel_flat < scroll_off:
+                scroll_off = sel_flat
+            elif sel_flat >= scroll_off + MAX_VISIBLE:
+                scroll_off = sel_flat - MAX_VISIBLE + 1
+        visible_rows = rows_content[scroll_off: scroll_off + MAX_VISIBLE]
 
-        # cur_sel is index into selectable_rows
-        if not hasattr(show_equipment_screen, '_cursor'):
-            show_equipment_screen._cursor = 0
-        cur_sel = getattr(show_equipment_screen, '_cursor', 0)
-        cur_sel = max(0, min(cur_sel, len(selectable_rows) - 1)) if selectable_rows else 0
-
-        # Layout
-        content_h = len(rows_content) + 2  # +2 for top/bottom border
-        box_h     = content_h
-        box_y     = max(0, (term_h - box_h) // 2)
-        box_x     = max(0, (term_w - BOX_W) // 2)
-
-        # Draw box background
+        # ── Box geometry ────────────────────────────────────────────────────
+        content_h  = len(visible_rows)
+        box_h      = content_h + 3   # top border + content + footer + bottom border
+        box_y      = max(0, (term_h - box_h) // 2)
+        box_x      = max(0, (term_w - BOX_W) // 2)
         panel_attr = curses.color_pair(COLOR_PANEL)
         bold_attr  = panel_attr | curses.A_BOLD
 
-        # Top border
+        # ── Top border with embedded title ──────────────────────────────────
+        title_str = f" EQUIPMENT  ({len(player.inventory)}/{MAX_INVENTORY}) "
         try:
             stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
             for bx in range(1, BOX_W - 1):
                 stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            tx = box_x + (BOX_W - len(title_str)) // 2
+            stdscr.addstr(box_y, tx, title_str, bold_attr)
             stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
         except curses.error:
             pass
 
-        # Middle rows
-        for ri, (text, eidx) in enumerate(rows_content):
-            row = box_y + 1 + ri
+        # ── Content rows ────────────────────────────────────────────────────
+        for ri, (text, eidx) in enumerate(visible_rows):
+            row      = box_y + 1 + ri
+            flat_idx = scroll_off + ri
+            is_sel   = bool(selectable_rows and selectable_rows[cur_sel] == flat_idx)
+            is_hdr   = (eidx is None and bool(text.strip()) and
+                        text.strip().replace('/', '').replace('(', '').
+                        replace(')', '').replace(' ', '').isdigit() is False and
+                        text.strip()[0].isupper() and
+                        all(c.isupper() or not c.isalpha() for c in text.strip()))
+
             try:
-                stdscr.addch(row, box_x, curses.ACS_VLINE, panel_attr)
+                stdscr.addch(row, box_x,           curses.ACS_VLINE, panel_attr)
                 stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+                stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
             except curses.error:
                 pass
 
-            # Clear interior
-            inner_w = BOX_W - 2
-            try:
-                stdscr.addstr(row, box_x + 1, ' ' * inner_w)
-            except curses.error:
-                pass
-
-            # Determine if this flat row is the selected selectable row
-            is_selected = (selectable_rows and
-                           ri == selectable_rows[cur_sel])
-
-            if is_selected:
-                display = ('> ' + text.lstrip())[:inner_w]
-                attr = bold_attr
+            if is_sel:
+                display = ('> ' + text.lstrip())[:BOX_W - 2]
+                attr    = bold_attr
+            elif is_hdr:
+                display = text[:BOX_W - 2]
+                attr    = bold_attr
             else:
-                display = text[:inner_w]
-                attr = panel_attr
+                display = text[:BOX_W - 2]
+                attr    = panel_attr
 
             try:
                 stdscr.addstr(row, box_x + 1, display, attr)
             except curses.error:
                 pass
 
-        # Bottom border
-        bot_row = box_y + 1 + len(rows_content)
+        # ── Footer row ──────────────────────────────────────────────────────
+        footer_row = box_y + 1 + content_h
+        FOOTER     = "  Enter:equip/use  D:drop  Esc/I:close"
+        try:
+            stdscr.addch(footer_row, box_x,           curses.ACS_VLINE, panel_attr)
+            stdscr.addch(footer_row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            stdscr.addstr(footer_row, box_x + 1, ' ' * (BOX_W - 2))
+            stdscr.addstr(footer_row, box_x + 1, FOOTER[:BOX_W - 2],
+                          panel_attr | curses.A_DIM)
+        except curses.error:
+            pass
+
+        # ── Bottom border ───────────────────────────────────────────────────
+        bot_row = box_y + 2 + content_h
         try:
             stdscr.addch(bot_row, box_x, curses.ACS_LLCORNER, panel_attr)
             for bx in range(1, BOX_W - 1):
@@ -992,10 +1034,10 @@ def show_equipment_screen(stdscr, player):
             pass
 
         stdscr.refresh()
-
         key = stdscr.getch()
 
-        if key in (27, ord('i'), ord('I')):          # Esc or I to close
+        # ── Input ───────────────────────────────────────────────────────────
+        if key in (27, ord('i'), ord('I')):
             show_equipment_screen._cursor = cur_sel
             return ''
 
@@ -1011,20 +1053,32 @@ def show_equipment_screen(stdscr, player):
 
         elif key in (curses.KEY_ENTER, 10, 13):
             if selectable_rows:
-                flat_row_idx = selectable_rows[cur_sel]
-                _, eidx = rows_content[flat_row_idx]
+                flat_idx = selectable_rows[cur_sel]
+                _, eidx  = rows_content[flat_idx]
                 if eidx is not None:
                     action, payload = entries[eidx]
                     if action == 'equip':
                         player.equip(payload)
-                        show_equipment_screen._cursor = 0
+                        show_equipment_screen._cursor = cur_sel
                     elif action == 'unequip':
                         player.unequip(payload)
                     elif action == 'use':
                         result = payload.use(player)
                         player.inventory.remove(payload)
-                        show_equipment_screen._cursor = 0
+                        show_equipment_screen._cursor = max(0, cur_sel - 1)
                         return result
+
+        elif key in (ord('d'), ord('D')):
+            if selectable_rows and items_on_map is not None:
+                flat_idx = selectable_rows[cur_sel]
+                _, eidx  = rows_content[flat_idx]
+                if eidx is not None:
+                    action, payload = entries[eidx]
+                    if action in ('equip', 'use'):   # inventory item, not a slot
+                        player.inventory.remove(payload)
+                        items_on_map[(px, py)] = payload
+                        show_equipment_screen._cursor = max(0, cur_sel - 1)
+                        return f"Dropped {payload.name}."
 
 
 WIN_TERMINAL = Terminal(
@@ -1581,7 +1635,7 @@ def main(stdscr):
             log              = collections.deque(maxlen=LOG_LINES)
 
         if key in (ord('i'), ord('I')):
-            result = show_equipment_screen(stdscr, player)
+            result = show_equipment_screen(stdscr, player, px, py, items_on_map)
             if result:
                 log.appendleft(result)
 
@@ -1663,9 +1717,12 @@ def main(stdscr):
                 px, py = nx, ny
                 player.gain_xp(1)
                 if (px, py) in items_on_map:
-                    picked = items_on_map.pop((px, py))
-                    player.pickup(picked)
-                    log.appendleft(f"Picked up {picked.name}.")
+                    picked = items_on_map[(px, py)]
+                    if player.pickup(picked):
+                        items_on_map.pop((px, py))
+                        log.appendleft(f"Picked up {picked.name}.")
+                    else:
+                        log.appendleft("Inventory full.")
 
                 if (px, py) in terminals_on_map:
                     t = terminals_on_map[(px, py)]
