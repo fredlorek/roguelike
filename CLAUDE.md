@@ -1,10 +1,11 @@
 # CLAUDE.md — Roguelike Project
 
 ## Overview
-Single-file terminal roguelike written in Python using `curses`. All game logic lives in `roguelike.py`.
+Terminal roguelike written in Python using `curses`. Core game logic lives in `roguelike.py`.
+Procedural lore content lives in `lore_gen.py` (the intentional exception to single-file convention).
 
 Run: `python3 roguelike.py`
-Syntax check: `python3 -m py_compile roguelike.py`
+Syntax check: `python3 -m py_compile roguelike.py && python3 -m py_compile lore_gen.py`
 
 ## Architecture
 
@@ -44,11 +45,66 @@ Syntax check: `python3 -m py_compile roguelike.py`
 
 ## Conventions
 - **No external dependencies** — stdlib only (`curses`, `copy`, `random`)
-- **Single file** — all changes go in `roguelike.py`; do not split into modules
+- **Single file (with one exception)** — all game logic goes in `roguelike.py`; do not split into modules. `lore_gen.py` is the deliberate exception: it is the content layer (word banks, procedural lore) and has **no curses dependency** — edit it freely without touching game logic
 - **In-place mutation for persistence** — use `.pop()`, `|=`, etc. on `items_on_map` and `explored`; never replace them with new objects while on an active floor
 - **`curses.error` suppression** — all `addch`/`addstr` calls are wrapped in `try/except curses.error` to handle terminal edge cases (last cell, small windows)
 - Stair positions are room centers: `stair_down = rooms[-1].center()`, `start/stair_up = rooms[0].center()`
 - Floor 1 has `stair_up = None`; floors > 1 have `stair_up = start`
+
+## To-Do: Path to Playable
+
+Items ordered by impact on the core game loop. The first few fix the biggest gaps in
+moment-to-moment feel; later items add depth and replayability.
+
+1. **Enemy variety and unique behaviours** — only 3 enemy types exist (Drone, Sentry, Stalker),
+   all of which just walk up and melee. Add 3–4 more types per theme zone with distinct
+   behaviours: a ranged shooter that keeps distance, a fast Stalker variant that moves twice per
+   turn, a heavy Brute that is slow but hits hard, an Exploder that deals splash damage on death.
+   This is the single biggest gap in combat feel.
+
+2. **Richer level-up rewards** — levelling up currently only grants +5 max HP. Add an ATK or DEF
+   bonus per level, or show a small modal letting the player put a point into one of their five
+   stats. Without this, the XP/level system feels inert.
+
+3. **Status effects** — add poison, burn, and stun as conditions that enemies (and traps) can
+   inflict, and that the player can inflict via consumables. Store active effects on `Player` and
+   `Enemy` and tick them at the start of each turn. This makes every combat decision matter more.
+
+4. **Consumable variety** — the inventory has med-patches, medkits, and nano-injects, all of which
+   just heal. Add a handful of tactically distinct items: a Smoke Grenade (blocks LOS for 3 turns),
+   an EMP Charge (disables all Drones and Sentries in FOV for 2 turns), a Scanner Chip (reveals
+   full floor map). These give players choices beyond "heal or don't heal."
+
+5. **Traps and hazardous tiles** — introduce a small set of floor hazards placed by `make_floor`:
+   tripwire mines, acid puddles, and electric floor panels. They raise the cost of careless
+   movement and reward careful play. Traps can also be disarmed by high Tech stat, giving that
+   stat more moment-to-moment expression.
+
+6. **Signal corruption mechanic** — floors 7–10 are narratively the most dire, but mechanically
+   identical to floor 1. Add a per-turn "signal interference" counter that grows on deep floors
+   and causes escalating effects: random stat penalties, brief FOV flickering, phantom enemy
+   sounds in the message log. This makes the theme tangible without adding new systems.
+
+7. **Minimap overlay** — the `explored` set is already tracked per floor. Add an `M` key that
+   draws a full-screen greyscale overview of the explored map so the player can orient themselves.
+   This is pure rendering work with no logic changes.
+
+8. **Hacking mechanic for terminals** — the Mind stat currently has limited expression. Let the
+   player "jack in" to a terminal (costs a turn) for a bonus that scales with Mind: low Mind just
+   reads the log, high Mind can disable nearby enemies, unlock a vault for free, or reveal the
+   floor map. Terminals become interactive rewards rather than passive flavour.
+
+9. **Run summary screen** — after winning or dying, show a recap: floors reached, enemies killed,
+   items found, XP earned, cause of death. This closes the feedback loop and makes each run feel
+   like it has a concrete shape. The data is all available on `Player` already — just needs
+   tallying and a display function alongside `show_game_over`.
+
+10. **Difficulty and challenge modes** — add a difficulty selector to character creation (Normal /
+    Hard / Ironman). Hard increases enemy ATK/HP by 25% and halves shop credits. Ironman prevents
+    the `R` key from resetting the dungeon — death is permanent. These are small constant
+    multipliers that dramatically extend replayability without new content.
+
+---
 
 ## Long-term Plan
 

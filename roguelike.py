@@ -7,6 +7,8 @@ import curses
 import heapq
 import random
 
+from lore_gen import generate_terminal
+
 MAP_W   = 80
 MAP_H   = 40
 WALL    = '#'
@@ -593,12 +595,20 @@ def scatter_items(tiles, n=6, exclude=()):
     return {pos: copy.copy(random.choice(ITEM_TEMPLATES)) for pos in positions}
 
 
-def scatter_terminals(tiles, n=2, exclude=()):
+def scatter_terminals(tiles, n=2, exclude=(), floor_num=1):
     floors = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
               if tiles[y][x] == FLOOR and (x, y) not in exclude]
     positions = random.sample(floors, min(n, len(floors)))
-    chosen    = random.sample(LORE_POOL, min(len(positions), len(LORE_POOL)))
-    return {pos: Terminal(title, lines) for pos, (title, lines) in zip(positions, chosen)}
+    result = {}
+    for i, pos in enumerate(positions):
+        if i % 2 == 0:
+            # Even slots: authored story beats from LORE_POOL
+            title, lines = random.choice(LORE_POOL)
+        else:
+            # Odd slots: procedurally generated ambient entry
+            title, lines = generate_terminal(floor_num)
+        result[pos] = Terminal(title, lines)
+    return result
 
 
 def scatter_special_rooms(tiles, rooms, floor_num):
@@ -664,7 +674,8 @@ def make_floor(floor_num):
         exclude_set = exclude_set | {boss_pos}
 
     items     = scatter_items(tiles, exclude=exclude_set | set(enemies.keys()))
-    terminals = scatter_terminals(tiles, exclude=exclude_set | set(enemies.keys()))
+    terminals = scatter_terminals(tiles, exclude=exclude_set | set(enemies.keys()),
+                                  floor_num=floor_num)
 
     special_rooms = scatter_special_rooms(tiles, rooms, floor_num)
 
@@ -2080,7 +2091,8 @@ def main(stdscr):
                                     items_on_map[pos] = copy.copy(random.choice(heals))
                                 log.appendleft("MED BAY — HP restored. Supplies found.")
                             elif rtype == 'terminal_hub':
-                                hub_lore = random.sample(LORE_POOL, min(3, len(LORE_POOL)))
+                                hub_lore = (random.sample(LORE_POOL, 1) +
+                                            [generate_terminal(current_floor) for _ in range(2)])
                                 avail    = list(sroom['tiles'] - {(px, py)})
                                 for pos, (title, lines) in zip(
                                         random.sample(avail, min(3, len(avail))), hub_lore):
