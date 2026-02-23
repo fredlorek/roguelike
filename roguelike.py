@@ -90,6 +90,28 @@ ITEM_TEMPLATES = [
     Item('Exo-Boots',       'boots', dfn=3, char='u'),
 ]
 
+SHOP_STOCK = [
+    # (item_template, base_price)
+    (Item('Vibro-Knife',     'weapon', atk=1, char='/'),            15),
+    (Item('Pulse Pistol',    'weapon', atk=3, char='/', ranged=True), 35),
+    (Item('Arc Rifle',       'weapon', atk=5, char='/', ranged=True), 55),
+    (Item('Ballistic Weave', 'armor',  dfn=1, char=']'),            15),
+    (Item('Combat Exosuit',  'armor',  dfn=3, char=']'),            35),
+    (Item('Aegis Plate',     'armor',  dfn=5, char=']'),            55),
+    (Item('Tactical Visor',  'helmet', dfn=1, char='^'),            15),
+    (Item('Combat Helm',     'helmet', dfn=2, char='^'),            25),
+    (Item('Siege Cranial',   'helmet', dfn=3, char='^'),            35),
+    (Item('Grip Wraps',      'gloves', atk=1, char=')'),            15),
+    (Item('Combat Gauntlets','gloves', atk=2, char=')'),            25),
+    (Item('Power Fists',     'gloves', atk=3, char=')'),            35),
+    (Item('Composite Boots', 'boots',  dfn=1, char='u'),            15),
+    (Item('Hardened Treads', 'boots',  dfn=2, char='u'),            25),
+    (Item('Exo-Boots',       'boots',  dfn=3, char='u'),            35),
+    (Item('Med-Patch',       'use',    char='+', consumable=True, heal=10), 10),
+    (Item('Nano-Inject',     'use',    char='+', consumable=True, heal=15), 18),
+    (Item('Medkit',          'use',    char='+', consumable=True, heal=25), 25),
+]
+
 LORE_POOL = [
     (
         "EREBUS STATION — Arrival Log — Day 1",
@@ -388,6 +410,7 @@ class Player:
         self.xp         = 0
         self.inventory  = []
         self.equipment  = {s: None for s in self.SLOTS}
+        self.credits    = 0
 
     @property
     def atk(self):
@@ -578,6 +601,41 @@ def scatter_terminals(tiles, n=2, exclude=()):
     return {pos: Terminal(title, lines) for pos, (title, lines) in zip(positions, chosen)}
 
 
+def scatter_special_rooms(tiles, rooms, floor_num):
+    """Pick interior rooms and assign special types. Returns dict keyed by int -> spec dict."""
+    if floor_num == MAX_FLOOR:
+        return {}
+    interior = rooms[1:-1]  # skip start room and stair/boss room
+    if not interior:
+        return {}
+
+    n      = min(2, len(interior))
+    chosen = random.sample(interior, n)
+
+    pool = ['shop', 'armory', 'medbay', 'terminal_hub', 'vault']
+    if floor_num <= 3:
+        pool = [t for t in pool if t != 'vault']
+    random.shuffle(pool)
+
+    specials = {}
+    for i, room in enumerate(chosen):
+        rtype = pool[i % len(pool)]
+        room_tiles = frozenset(
+            (x, y)
+            for y in range(room.y1, room.y2)
+            for x in range(room.x1, room.x2)
+            if tiles[y][x] == FLOOR
+        )
+        spec = {'type': rtype, 'tiles': room_tiles, 'triggered': False}
+        if rtype == 'shop':
+            sample_size = min(7, len(SHOP_STOCK))
+            spec['stock'] = [(copy.copy(item), price)
+                             for item, price in random.sample(SHOP_STOCK, sample_size)]
+        specials[i] = spec
+
+    return specials
+
+
 def make_floor(floor_num):
     theme      = get_theme(floor_num)
     tiles, rooms = generate_dungeon(**theme['gen'])
@@ -605,15 +663,35 @@ def make_floor(floor_num):
         )
         exclude_set = exclude_set | {boss_pos}
 
+    items     = scatter_items(tiles, exclude=exclude_set | set(enemies.keys()))
+    terminals = scatter_terminals(tiles, exclude=exclude_set | set(enemies.keys()))
+
+    special_rooms = scatter_special_rooms(tiles, rooms, floor_num)
+
+    # Clear enemies/items/terminals from special room tiles (safe zones)
+    all_special_tiles: set = set()
+    for sr in special_rooms.values():
+        all_special_tiles |= sr['tiles']
+    for pos in list(enemies.keys()):
+        if pos in all_special_tiles:
+            del enemies[pos]
+    for pos in list(items.keys()):
+        if pos in all_special_tiles:
+            del items[pos]
+    for pos in list(terminals.keys()):
+        if pos in all_special_tiles:
+            del terminals[pos]
+
     return {
-        'tiles':      tiles,
-        'start':      start,
-        'stair_up':   stair_up,
-        'stair_down': stair_down,
-        'items':      scatter_items(tiles, exclude=exclude_set | set(enemies.keys())),
-        'enemies':    enemies,
-        'terminals':  scatter_terminals(tiles, exclude=exclude_set | set(enemies.keys())),
-        'explored':   set(),
+        'tiles':         tiles,
+        'start':         start,
+        'stair_up':      stair_up,
+        'stair_down':    stair_down,
+        'items':         items,
+        'enemies':       enemies,
+        'terminals':     terminals,
+        'explored':      set(),
+        'special_rooms': special_rooms,
     }
 
 
@@ -720,6 +798,7 @@ COLOR_TERMINAL = 11 # cyan bold   — unread terminal
 COLOR_WALL_2   = 12 # yellow      — Research Wing walls
 COLOR_WALL_3   = 13 # red         — Sublevel Core walls
 COLOR_WALL_4   = 14 # green       — Signal Source walls (alien glow)
+COLOR_SPECIAL  = 15 # blue        — special room floor tiles
 
 
 def setup_colors():
@@ -739,6 +818,7 @@ def setup_colors():
     curses.init_pair(COLOR_WALL_2,   curses.COLOR_YELLOW,  -1)
     curses.init_pair(COLOR_WALL_3,   curses.COLOR_RED,     -1)
     curses.init_pair(COLOR_WALL_4,   curses.COLOR_GREEN,   -1)
+    curses.init_pair(COLOR_SPECIAL,  curses.COLOR_BLUE,    -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -765,6 +845,7 @@ def draw_panel(stdscr, player, col, rows, current_floor):
         (f"ATK: {player.atk}",                             panel_attr),
         (f"DEF: {player.dfn}",                             panel_attr),
         (f"DODGE: {player.dodge_chance}%",                 panel_attr),
+        (f"CR:   {player.credits}",                        panel_attr),
         (None, 0),                                          # blank
         ("[I] Equipment",                                   panel_attr),
     ]
@@ -788,7 +869,7 @@ def draw_panel(stdscr, player, col, rows, current_floor):
 
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies=None, log=None,
-         terminals=None, target_line=None, target_pos=None):
+         terminals=None, target_line=None, target_pos=None, special_rooms=None):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -801,6 +882,11 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
 
     theme     = get_theme(current_floor)
     wall_attr = curses.color_pair(theme['wall_cp'])
+
+    special_tile_set = set()
+    if special_rooms:
+        for sr in special_rooms.values():
+            special_tile_set |= sr['tiles']
 
     # --- Map area ---
     for sy in range(view_h):
@@ -842,7 +928,10 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                     attr = curses.color_pair(COLOR_ENEMY) | curses.A_BOLD
                 else:
                     ch   = FLOOR
-                    attr = curses.color_pair(COLOR_FLOOR) | curses.A_DIM
+                    if (mx, my) in special_tile_set:
+                        attr = curses.color_pair(COLOR_SPECIAL) | curses.A_DIM
+                    else:
+                        attr = curses.color_pair(COLOR_FLOOR) | curses.A_DIM
             else:
                 # Explored but out of sight — permanent fixtures stay visible
                 if (mx, my) == stair_down:
@@ -880,7 +969,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
     draw_panel(stdscr, player, panel_col, view_h, current_floor)
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  >/< stairs  I:equip  U:use  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  I:equip  U:use  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -1100,6 +1189,186 @@ def show_equipment_screen(stdscr, player, px=0, py=0, items_on_map=None):
                         items_on_map[(px, py)] = payload
                         show_equipment_screen._cursor = max(0, cur_sel - 1)
                         return f"Dropped {payload.name}."
+
+
+def show_shop_screen(stdscr, player, stock):
+    """Modal shop screen for buying items. stock is mutated in-place. Returns message string."""
+    BOX_W       = 58
+    MAX_VISIBLE = 18
+    cur_sel     = 0
+    scroll_off  = 0
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        panel_attr = curses.color_pair(COLOR_PANEL)
+        bold_attr  = panel_attr | curses.A_BOLD
+
+        rows_content = []   # (text, stock_idx or None)
+        rows_content.append(("  AVAILABLE ITEMS", None))
+        rows_content.append(("", None))
+
+        for idx, (item, base_price) in enumerate(stock):
+            price = int(base_price * max(0.5, 1.0 - (player.presence - 5) * 0.05))
+            stat  = item.stat_str()
+            text  = f"  {item.name:<20} [{item.slot:<6}] {stat:<14} {price:>3} cr"
+            rows_content.append((text[:BOX_W - 2], idx))
+
+        if not stock:
+            rows_content.append(("  (out of stock)", None))
+
+        selectable_rows = [i for i, (_, si) in enumerate(rows_content) if si is not None]
+        if selectable_rows:
+            cur_sel = max(0, min(cur_sel, len(selectable_rows) - 1))
+        else:
+            cur_sel = 0
+
+        if selectable_rows:
+            sel_flat = selectable_rows[cur_sel]
+            if sel_flat < scroll_off:
+                scroll_off = sel_flat
+            elif sel_flat >= scroll_off + MAX_VISIBLE:
+                scroll_off = sel_flat - MAX_VISIBLE + 1
+        visible_rows = rows_content[scroll_off: scroll_off + MAX_VISIBLE]
+
+        content_h = len(visible_rows)
+        box_h     = content_h + 3
+        box_y     = max(0, (term_h - box_h) // 2)
+        box_x     = max(0, (term_w - BOX_W) // 2)
+
+        title_str = f" SUPPLY DEPOT  [Credits: {player.credits}] "
+        try:
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            tx = box_x + (BOX_W - len(title_str)) // 2
+            stdscr.addstr(box_y, tx, title_str, bold_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        for ri, (text, sidx) in enumerate(visible_rows):
+            row      = box_y + 1 + ri
+            flat_idx = scroll_off + ri
+            is_sel   = bool(selectable_rows and selectable_rows[cur_sel] == flat_idx)
+            try:
+                stdscr.addch(row, box_x,             curses.ACS_VLINE, panel_attr)
+                stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+                stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
+            except curses.error:
+                pass
+            if is_sel:
+                display = ('> ' + text.lstrip())[:BOX_W - 2]
+                attr    = bold_attr
+            else:
+                display = text[:BOX_W - 2]
+                attr    = panel_attr
+            try:
+                stdscr.addstr(row, box_x + 1, display, attr)
+            except curses.error:
+                pass
+
+        footer_row = box_y + 1 + content_h
+        FOOTER     = "  Enter:buy   W/S:scroll   Esc:close"
+        try:
+            stdscr.addch(footer_row, box_x,             curses.ACS_VLINE, panel_attr)
+            stdscr.addch(footer_row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            stdscr.addstr(footer_row, box_x + 1, ' ' * (BOX_W - 2))
+            stdscr.addstr(footer_row, box_x + 1, FOOTER[:BOX_W - 2], panel_attr | curses.A_DIM)
+        except curses.error:
+            pass
+
+        bot_row = box_y + 2 + content_h
+        try:
+            stdscr.addch(bot_row, box_x, curses.ACS_LLCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(bot_row, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(bot_row, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+
+        if key in (27, ord('i'), ord('I'), ord('t'), ord('T')):
+            return ''
+
+        if key in (curses.KEY_UP, ord('w'), ord('W')):
+            if selectable_rows:
+                cur_sel = max(0, cur_sel - 1)
+        elif key in (curses.KEY_DOWN, ord('s'), ord('S')):
+            if selectable_rows:
+                cur_sel = min(len(selectable_rows) - 1, cur_sel + 1)
+        elif key in (curses.KEY_ENTER, 10, 13):
+            if selectable_rows and stock:
+                flat_idx = selectable_rows[cur_sel]
+                _, sidx  = rows_content[flat_idx]
+                if sidx is not None:
+                    item, base_price = stock[sidx]
+                    price = int(base_price * max(0.5, 1.0 - (player.presence - 5) * 0.05))
+                    if player.credits < price:
+                        return f"Need {price} cr, have {player.credits} cr."
+                    if len(player.inventory) >= MAX_INVENTORY:
+                        return "Inventory full."
+                    player.credits -= price
+                    player.inventory.append(copy.copy(item))
+                    stock.pop(sidx)
+                    return f"Bought {item.name} for {price} cr."
+
+
+def show_vault_prompt(stdscr, cost, player_credits):
+    """Small centered modal asking to pay credits to unlock vault.
+    Returns True (pay) or False (cancel)."""
+    BOX_W      = 36
+    panel_attr = curses.color_pair(COLOR_PANEL)
+    bold_attr  = panel_attr | curses.A_BOLD
+
+    content_lines = [
+        ("  VAULT — LOCKED",                               bold_attr),
+        (f"  Cost: {cost} cr  (have: {player_credits} cr)", panel_attr),
+        ("",                                               0),
+        ("  [Y] Unlock   [N] Cancel",                     panel_attr),
+    ]
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        box_h = len(content_lines) + 2
+        box_y = max(0, (term_h - box_h) // 2)
+        box_x = max(0, (term_w - BOX_W) // 2)
+
+        try:
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        for ri, (text, attr) in enumerate(content_lines):
+            row = box_y + 1 + ri
+            try:
+                stdscr.addch(row, box_x,             curses.ACS_VLINE, panel_attr)
+                stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+                stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
+                if text:
+                    stdscr.addstr(row, box_x + 1, text[:BOX_W - 2], attr)
+            except curses.error:
+                pass
+
+        bot_row = box_y + 1 + len(content_lines)
+        try:
+            stdscr.addch(bot_row, box_x, curses.ACS_LLCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(bot_row, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(bot_row, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+        key = stdscr.getch()
+        if key in (ord('y'), ord('Y')):
+            return True
+        if key in (ord('n'), ord('N'), 27):
+            return False
 
 
 WIN_TERMINAL = Terminal(
@@ -1610,6 +1879,7 @@ def main(stdscr):
     items_on_map   = floor_data['items']
     enemies_on_map = floor_data['enemies']
     terminals_on_map = floor_data['terminals']
+    special_rooms    = floor_data.get('special_rooms', {})
     stair_up      = floor_data['stair_up']
     stair_down    = floor_data['stair_down']
     explored      = floor_data['explored']
@@ -1618,7 +1888,7 @@ def main(stdscr):
     explored |= visible
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies_on_map, log,
-         terminals=terminals_on_map)
+         terminals=terminals_on_map, special_rooms=special_rooms)
 
     MOVE_KEYS = {
         # Cardinal — WASD
@@ -1660,6 +1930,7 @@ def main(stdscr):
             items_on_map     = floor_data['items']
             enemies_on_map   = floor_data['enemies']
             terminals_on_map = floor_data['terminals']
+            special_rooms    = floor_data.get('special_rooms', {})
             stair_up         = floor_data['stair_up']
             stair_down       = floor_data['stair_down']
             explored         = floor_data['explored']
@@ -1678,6 +1949,18 @@ def main(stdscr):
                 player.inventory.remove(item)
             else:
                 log.appendleft("No consumables in inventory.")
+
+        if key in (ord('t'), ord('T')):
+            in_shop = False
+            for sroom in special_rooms.values():
+                if (px, py) in sroom['tiles'] and sroom['type'] == 'shop':
+                    in_shop = True
+                    result = show_shop_screen(stdscr, player, sroom['stock'])
+                    if result:
+                        log.appendleft(result)
+                    break
+            if not in_shop:
+                log.appendleft("No shop here.")
 
         if key in (ord('f'), ord('F')):
             weapon = player.equipment.get('weapon')
@@ -1708,9 +1991,11 @@ def main(stdscr):
                         if enemy.hp <= 0:
                             del enemies_on_map[hit_pos]
                             lvl_msg = player.gain_xp(enemy.xp_reward)
+                            cr_drop = max(1, enemy.xp_reward // 2)
+                            player.credits += cr_drop
                             log.appendleft(
                                 f"You shoot {enemy.name} for {dmg}. "
-                                f"{enemy.name} destroyed! +{enemy.xp_reward} XP")
+                                f"{enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
                             if lvl_msg:
                                 log.appendleft(lvl_msg)
                             if enemy.boss:
@@ -1735,7 +2020,9 @@ def main(stdscr):
                 if enemy.hp <= 0:
                     del enemies_on_map[(nx, ny)]
                     lvl_msg = player.gain_xp(enemy.xp_reward)
-                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP")
+                    cr_drop = max(1, enemy.xp_reward // 2)
+                    player.credits += cr_drop
+                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
                     if lvl_msg:
                         log.appendleft(lvl_msg)
                     if enemy.boss:
@@ -1770,6 +2057,53 @@ def main(stdscr):
                     else:
                         log.appendleft(f"[already read] {t.title[:38]}")
 
+                # Special room entry
+                for sroom in special_rooms.values():
+                    if (px, py) in sroom['tiles']:
+                        rtype = sroom['type']
+                        if not sroom['triggered']:
+                            sroom['triggered'] = True
+                            if rtype == 'shop':
+                                log.appendleft("SUPPLY DEPOT — [T] to trade.")
+                            elif rtype == 'armory':
+                                gear = [it for it in ITEM_TEMPLATES
+                                        if it.slot in ('weapon', 'armor', 'helmet', 'gloves', 'boots')]
+                                avail = list(sroom['tiles'] - {(px, py)})
+                                for pos in random.sample(avail, min(3, len(avail))):
+                                    items_on_map[pos] = copy.copy(random.choice(gear))
+                                log.appendleft("ARMORY — Equipment available.")
+                            elif rtype == 'medbay':
+                                player.hp = player.max_hp
+                                heals = [it for it in ITEM_TEMPLATES if it.consumable]
+                                avail = list(sroom['tiles'] - {(px, py)})
+                                for pos in random.sample(avail, min(2, len(avail))):
+                                    items_on_map[pos] = copy.copy(random.choice(heals))
+                                log.appendleft("MED BAY — HP restored. Supplies found.")
+                            elif rtype == 'terminal_hub':
+                                hub_lore = random.sample(LORE_POOL, min(3, len(LORE_POOL)))
+                                avail    = list(sroom['tiles'] - {(px, py)})
+                                for pos, (title, lines) in zip(
+                                        random.sample(avail, min(3, len(avail))), hub_lore):
+                                    terminals_on_map[pos] = Terminal(title, lines)
+                                log.appendleft("TERMINAL HUB — Data nodes online.")
+                            elif rtype == 'vault':
+                                cost = 50
+                                if show_vault_prompt(stdscr, cost, player.credits):
+                                    if player.credits >= cost:
+                                        player.credits -= cost
+                                        rare  = [it for it in ITEM_TEMPLATES
+                                                 if it.atk >= 3 or it.dfn >= 3]
+                                        avail = list(sroom['tiles'] - {(px, py)})
+                                        for pos in random.sample(avail, min(4, len(avail))):
+                                            items_on_map[pos] = copy.copy(random.choice(rare))
+                                        log.appendleft("VAULT OPENED. Rare gear inside.")
+                                    else:
+                                        sroom['triggered'] = False
+                                        log.appendleft("Insufficient credits.")
+                                else:
+                                    sroom['triggered'] = False
+                        break
+
                 if (px, py) == stair_down:
                     current_floor += 1
                     if current_floor not in floors:
@@ -1780,6 +2114,7 @@ def main(stdscr):
                     items_on_map     = floor_data['items']
                     enemies_on_map   = floor_data['enemies']
                     terminals_on_map = floor_data['terminals']
+                    special_rooms    = floor_data.get('special_rooms', {})
                     stair_up         = floor_data['stair_up']
                     stair_down       = floor_data['stair_down']
                     explored         = floor_data['explored']
@@ -1795,6 +2130,7 @@ def main(stdscr):
                     items_on_map     = floor_data['items']
                     enemies_on_map   = floor_data['enemies']
                     terminals_on_map = floor_data['terminals']
+                    special_rooms    = floor_data.get('special_rooms', {})
                     stair_up         = floor_data['stair_up']
                     stair_down       = floor_data['stair_down']
                     explored         = floor_data['explored']
@@ -1811,7 +2147,7 @@ def main(stdscr):
         if won:
             draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                  stair_up, stair_down, current_floor, enemies_on_map, log,
-                 terminals=terminals_on_map)
+                 terminals=terminals_on_map, special_rooms=special_rooms)
             show_terminal(stdscr, WIN_TERMINAL)
             if show_win_screen(stdscr, player):
                 # New run
@@ -1826,6 +2162,7 @@ def main(stdscr):
                 items_on_map   = floor_data['items']
                 enemies_on_map = floor_data['enemies']
                 terminals_on_map = floor_data['terminals']
+                special_rooms    = floor_data.get('special_rooms', {})
                 stair_up       = floor_data['stair_up']
                 stair_down     = floor_data['stair_down']
                 explored       = floor_data['explored']
@@ -1840,7 +2177,7 @@ def main(stdscr):
             player.hp = 0
             draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                  stair_up, stair_down, current_floor, enemies_on_map, log,
-                 terminals=terminals_on_map)
+                 terminals=terminals_on_map, special_rooms=special_rooms)
             if show_game_over(stdscr, player, current_floor):
                 player           = show_character_creation(stdscr)
                 current_floor    = 1
@@ -1852,6 +2189,7 @@ def main(stdscr):
                 items_on_map     = floor_data['items']
                 enemies_on_map   = floor_data['enemies']
                 terminals_on_map = floor_data['terminals']
+                special_rooms    = floor_data.get('special_rooms', {})
                 stair_up         = floor_data['stair_up']
                 stair_down       = floor_data['stair_down']
                 explored         = floor_data['explored']
@@ -1863,7 +2201,7 @@ def main(stdscr):
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, log,
-             terminals=terminals_on_map)
+             terminals=terminals_on_map, special_rooms=special_rooms)
 
 
 if __name__ == '__main__':
