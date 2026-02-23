@@ -56,11 +56,9 @@ Syntax check: `python3 -m py_compile roguelike.py && python3 -m py_compile lore_
 Items ordered by impact on the core game loop. The first few fix the biggest gaps in
 moment-to-moment feel; later items add depth and replayability.
 
-1. **Enemy variety and unique behaviours** — only 3 enemy types exist (Drone, Sentry, Stalker),
-   all of which just walk up and melee. Add 3–4 more types per theme zone with distinct
-   behaviours: a ranged shooter that keeps distance, a fast Stalker variant that moves twice per
-   turn, a heavy Brute that is slow but hits hard, an Exploder that deals splash damage on death.
-   This is the single biggest gap in combat feel.
+1. ~~**Enemy variety and unique behaviours**~~ ✓ — Gunner (ranged/retreat), Lurker (2 steps/turn),
+   Brute (acts every other turn), Exploder (splash on death). Per-type colour coding. Floor weights
+   tuned across all 4 theme zones.
 
 2. **Richer level-up rewards** — levelling up currently only grants +5 max HP. Add an ATK or DEF
    bonus per level, or show a small modal letting the player put a point into one of their five

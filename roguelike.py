@@ -480,7 +480,7 @@ class Player:
 
 
 class Enemy:
-    def __init__(self, name, char, hp, atk, dfn, xp_reward, boss=False):
+    def __init__(self, name, char, hp, atk, dfn, xp_reward, boss=False, behaviour='melee'):
         self.name      = name
         self.char      = char
         self.hp        = hp
@@ -489,12 +489,18 @@ class Enemy:
         self.dfn       = dfn
         self.xp_reward = xp_reward
         self.boss      = boss
+        self.behaviour = behaviour
+        self.cooldown  = 0
 
 
 ENEMY_TEMPLATES = [
-    {'name': 'Drone',   'char': 'd', 'hp': 8,  'atk': 3, 'dfn': 0, 'xp': 10},
-    {'name': 'Sentry',  'char': 'S', 'hp': 15, 'atk': 5, 'dfn': 2, 'xp': 25},
-    {'name': 'Stalker', 'char': 'X', 'hp': 22, 'atk': 7, 'dfn': 1, 'xp': 40},
+    {'name': 'Drone',    'char': 'd', 'hp': 8,  'atk': 3,  'dfn': 0, 'xp': 10, 'behaviour': 'melee'},
+    {'name': 'Sentry',   'char': 'S', 'hp': 15, 'atk': 5,  'dfn': 2, 'xp': 25, 'behaviour': 'melee'},
+    {'name': 'Stalker',  'char': 'X', 'hp': 22, 'atk': 7,  'dfn': 1, 'xp': 40, 'behaviour': 'melee'},
+    {'name': 'Gunner',   'char': 'G', 'hp': 12, 'atk': 6,  'dfn': 0, 'xp': 30, 'behaviour': 'ranged'},
+    {'name': 'Lurker',   'char': 'L', 'hp': 14, 'atk': 5,  'dfn': 0, 'xp': 35, 'behaviour': 'fast'},
+    {'name': 'Brute',    'char': 'B', 'hp': 35, 'atk': 10, 'dfn': 3, 'xp': 60, 'behaviour': 'brute'},
+    {'name': 'Exploder', 'char': 'E', 'hp': 10, 'atk': 4,  'dfn': 0, 'xp': 20, 'behaviour': 'exploder'},
 ]
 
 
@@ -504,22 +510,22 @@ THEME_DATA = {
     (1,  3):  {'name': 'Operations Deck',
                'wall_cp': COLOR_WALL,
                'msg': None,
-               'weights': [5, 3, 1],
+               'weights': [5, 3, 1, 2, 1, 0, 2],
                'gen': {'max_rooms': 30, 'min_rw': 5, 'max_rw': 12, 'min_rh': 4, 'max_rh': 9}},
     (4,  6):  {'name': 'Research Wing',
                'wall_cp': COLOR_WALL_2,
                'msg': "Emergency lighting only. The station is badly damaged.",
-               'weights': [2, 5, 2],
+               'weights': [2, 5, 2, 3, 2, 1, 2],
                'gen': {'max_rooms': 25, 'min_rw': 4, 'max_rw': 10, 'min_rh': 3, 'max_rh': 8}},
     (7,  9):  {'name': 'Sublevel Core',
                'wall_cp': COLOR_WALL_3,
                'msg': "The signal is overwhelming. Something is very wrong here.",
-               'weights': [1, 2, 6],
+               'weights': [1, 2, 5, 2, 3, 2, 1],
                'gen': {'max_rooms': 20, 'min_rw': 3, 'max_rw': 9, 'min_rh': 3, 'max_rh': 7}},
     (10, 10): {'name': 'Signal Source',
                'wall_cp': COLOR_WALL_4,
                'msg': "You feel it in your bones. You have arrived.",
-               'weights': [0, 1, 4],
+               'weights': [0, 1, 4, 1, 3, 3, 1],
                'gen': {'max_rooms': 15, 'min_rw': 6, 'max_rw': 14, 'min_rh': 5, 'max_rh': 11}},
 }
 
@@ -545,6 +551,7 @@ def scatter_enemies(tiles, floor_num, n, exclude=(), weights=None):
             atk=max(1, int(t['atk'] * scale)),
             dfn=int(t['dfn'] * scale),
             xp_reward=int(t['xp'] * scale),
+            behaviour=t.get('behaviour', 'melee'),
         )
     return result
 
@@ -809,7 +816,11 @@ COLOR_TERMINAL = 11 # cyan bold   — unread terminal
 COLOR_WALL_2   = 12 # yellow      — Research Wing walls
 COLOR_WALL_3   = 13 # red         — Sublevel Core walls
 COLOR_WALL_4   = 14 # green       — Signal Source walls (alien glow)
-COLOR_SPECIAL  = 15 # blue        — special room floor tiles
+COLOR_SPECIAL      = 15 # blue        — special room floor tiles
+COLOR_ENEMY_RANGE  = 16 # cyan        — Gunner
+COLOR_ENEMY_FAST   = 17 # yellow      — Lurker
+COLOR_ENEMY_BRUTE  = 18 # white       — Brute
+COLOR_ENEMY_EXPL   = 19 # magenta     — Exploder
 
 
 def setup_colors():
@@ -829,7 +840,11 @@ def setup_colors():
     curses.init_pair(COLOR_WALL_2,   curses.COLOR_YELLOW,  -1)
     curses.init_pair(COLOR_WALL_3,   curses.COLOR_RED,     -1)
     curses.init_pair(COLOR_WALL_4,   curses.COLOR_GREEN,   -1)
-    curses.init_pair(COLOR_SPECIAL,  curses.COLOR_BLUE,    -1)
+    curses.init_pair(COLOR_SPECIAL,      curses.COLOR_BLUE,    -1)
+    curses.init_pair(COLOR_ENEMY_RANGE,  curses.COLOR_CYAN,    -1)
+    curses.init_pair(COLOR_ENEMY_FAST,   curses.COLOR_YELLOW,  -1)
+    curses.init_pair(COLOR_ENEMY_BRUTE,  curses.COLOR_WHITE,   -1)
+    curses.init_pair(COLOR_ENEMY_EXPL,   curses.COLOR_MAGENTA, -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor):
@@ -935,8 +950,14 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                             if not t.read
                             else curses.color_pair(COLOR_DARK) | curses.A_DIM)
                 elif enemies and (mx, my) in enemies:
-                    ch   = enemies[(mx, my)].char
-                    attr = curses.color_pair(COLOR_ENEMY) | curses.A_BOLD
+                    e  = enemies[(mx, my)]
+                    ch = e.char
+                    cp = {'ranged':   COLOR_ENEMY_RANGE,
+                          'fast':     COLOR_ENEMY_FAST,
+                          'brute':    COLOR_ENEMY_BRUTE,
+                          'exploder': COLOR_ENEMY_EXPL,
+                         }.get(e.behaviour, COLOR_ENEMY)
+                    attr = curses.color_pair(cp) | curses.A_BOLD
                 else:
                     ch   = FLOOR
                     if (mx, my) in special_tile_set:
@@ -1791,47 +1812,134 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
 
     intimidate_chance = max(0, (player.presence - 5) * 3)
 
-    for epos, enemy in list(enemies.items()):
+    def _random_walk(enemy, epos):
+        """Try to move enemy one step randomly. Updates enemies/occupied in place."""
         ex, ey = epos
+        dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
+        random.shuffle(dirs)
+        for ndx, ndy in dirs:
+            npos = (ex + ndx, ey + ndy)
+            nx, ny = npos
+            if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                    and tiles[ny][nx] == FLOOR
+                    and npos not in occupied
+                    and npos != player_pos):
+                occupied.discard(epos)
+                occupied.add(npos)
+                enemies[npos] = enemy
+                del enemies[epos]
+                return npos
+        return epos
+
+    def _do_melee(enemy, epos):
+        """Attack player from epos (must be adjacent). Returns True if attack happened."""
+        if abs(epos[0] - px) + abs(epos[1] - py) != 1:
+            return False
+        if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
+            msgs.append(f"{enemy.name} attacks — you dodge!")
+        else:
+            dmg = max(1, enemy.atk - player.dfn)
+            player.hp -= dmg
+            msgs.append(f"{enemy.name} hits you for {dmg}!")
+        return True
+
+    def _astar_step(enemy, epos):
+        """Take one A* step toward player. Returns new position after step (may be same)."""
+        blocked = occupied - {epos}
+        path    = find_path(tiles, epos, player_pos, blocked)
+        if not path:
+            return epos, False  # (new_pos, attacked)
+        step = path[0]
+        if step == player_pos:
+            _do_melee(enemy, epos)
+            return epos, True
+        elif step not in occupied:
+            occupied.discard(epos)
+            occupied.add(step)
+            enemies[step] = enemy
+            del enemies[epos]
+            return step, False
+        return epos, False
+
+    for epos, enemy in list(enemies.items()):
         # Presence intimidate: visible enemies may hesitate and skip their turn
         if intimidate_chance > 0 and epos in visible:
             if random.randint(1, 100) <= intimidate_chance:
                 continue
-        if epos in visible:
-            # A* toward the player; other enemies are obstacles (but not the goal)
-            blocked = occupied - {epos}
-            path    = find_path(tiles, epos, player_pos, blocked)
-            if path:
-                step = path[0]
-                if step == player_pos:
-                    # Reflex dodge roll
+
+        behaviour = enemy.behaviour
+
+        # ── Ranged (Gunner) ──────────────────────────────────────────────────
+        if behaviour == 'ranged':
+            if epos in visible:
+                ex, ey = epos
+                dist   = abs(ex - px) + abs(ey - py)
+                if dist <= 2:
+                    # Too close — try to retreat to the tile furthest from player
+                    best_pos  = epos
+                    best_dist = dist
+                    for ndx, ndy in [(0,1),(0,-1),(1,0),(-1,0)]:
+                        cand = (ex + ndx, ey + ndy)
+                        cx, cy = cand
+                        if (0 <= cx < MAP_W and 0 <= cy < MAP_H
+                                and tiles[cy][cx] == FLOOR
+                                and cand not in occupied
+                                and cand != player_pos):
+                            d = abs(cx - px) + abs(cy - py)
+                            if d > best_dist:
+                                best_dist = d
+                                best_pos  = cand
+                    if best_pos != epos:
+                        occupied.discard(epos)
+                        occupied.add(best_pos)
+                        enemies[best_pos] = enemy
+                        del enemies[epos]
+                else:
+                    # Fire at player
                     if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
-                        msgs.append(f"{enemy.name} attacks — you dodge!")
+                        msgs.append(f"{enemy.name} fires at you — you dodge!")
                     else:
                         dmg = max(1, enemy.atk - player.dfn)
                         player.hp -= dmg
-                        msgs.append(f"{enemy.name} hits you for {dmg}!")
-                elif step not in occupied:
-                    occupied.discard(epos)
-                    occupied.add(step)
-                    enemies[step] = enemy
-                    del enemies[epos]
-        else:
-            # Not in FOV — random walk
-            dirs = [(0, 1), (0, -1), (1, 0), (-1, 0)]
-            random.shuffle(dirs)
-            for ndx, ndy in dirs:
-                npos = (ex + ndx, ey + ndy)
-                nx, ny = npos
-                if (0 <= nx < MAP_W and 0 <= ny < MAP_H
-                        and tiles[ny][nx] == FLOOR
-                        and npos not in occupied
-                        and npos != player_pos):
-                    occupied.discard(epos)
-                    occupied.add(npos)
-                    enemies[npos] = enemy
-                    del enemies[epos]
+                        msgs.append(f"{enemy.name} fires at you for {dmg}!")
+            else:
+                _random_walk(enemy, epos)
+            continue
+
+        # ── Fast (Lurker) ────────────────────────────────────────────────────
+        if behaviour == 'fast':
+            cur = epos
+            for _ in range(2):
+                if cur in visible:
+                    cur, attacked = _astar_step(enemy, cur)
+                    if attacked:
+                        break
+                    # Only take a second step if still in FOV after moving
+                    if cur not in visible:
+                        break
+                else:
+                    _random_walk(enemy, cur)
                     break
+            continue
+
+        # ── Brute ────────────────────────────────────────────────────────────
+        if behaviour == 'brute':
+            if epos in visible:
+                if enemy.cooldown > 0:
+                    enemy.cooldown -= 1
+                    continue
+                # Act this turn, then set cooldown
+                enemy.cooldown = 1
+                _astar_step(enemy, epos)
+            else:
+                _random_walk(enemy, epos)
+            continue
+
+        # ── Exploder / Melee (default) ───────────────────────────────────────
+        if epos in visible:
+            _astar_step(enemy, epos)
+        else:
+            _random_walk(enemy, epos)
 
     return msgs
 
@@ -2001,6 +2109,14 @@ def main(stdscr):
                         enemy.hp -= dmg
                         if enemy.hp <= 0:
                             del enemies_on_map[hit_pos]
+                            if enemy.behaviour == 'exploder':
+                                kx, ky = hit_pos
+                                if abs(kx - px) + abs(ky - py) <= 1:
+                                    splash = max(1, int(enemy.atk * 0.5))
+                                    player.hp -= splash
+                                    log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
+                                else:
+                                    log.appendleft(f"{enemy.name} detonates!")
                             lvl_msg = player.gain_xp(enemy.xp_reward)
                             cr_drop = max(1, enemy.xp_reward // 2)
                             player.credits += cr_drop
@@ -2030,6 +2146,10 @@ def main(stdscr):
                 enemy.hp -= dmg
                 if enemy.hp <= 0:
                     del enemies_on_map[(nx, ny)]
+                    if enemy.behaviour == 'exploder':
+                        splash = max(1, int(enemy.atk * 0.5))
+                        player.hp -= splash
+                        log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
                     lvl_msg = player.gain_xp(enemy.xp_reward)
                     cr_drop = max(1, enemy.xp_reward // 2)
                     player.credits += cr_drop
