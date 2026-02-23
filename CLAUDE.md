@@ -26,6 +26,7 @@ condition — sites can be cleared but the universe keeps expanding.
 - `POINT_BUY_POINTS = 20` — stat points available at character creation
 - `STARTING_SKILL_POINTS = 4` — free skill points allocated in creation Step 4
 - `SKILL_MAX = 5` — maximum level for any skill
+- `COLOR_HAZARD = 20` — red color pair for hazard tiles (`^`/`~`/`=`)
 
 ### Data flow
 1. `make_floor(floor_num, theme_fn, enemy_density, is_final, place_boss)` generates a floor dict
@@ -39,7 +40,7 @@ condition — sites can be cleared but the universe keeps expanding.
 |---|---|
 | `generate_dungeon()` | BSP-style room placement + corridor carving; returns `(tiles, rooms)` |
 | `make_floor(n, ...)` | Wraps dungeon gen + item/enemy scatter; returns floor state dict |
-| `scatter_enemies / items / terminals / special_rooms` | Populate a freshly generated floor |
+| `scatter_enemies / items / terminals / special_rooms / hazards` | Populate a freshly generated floor |
 | `compute_fov(tiles, px, py, radius)` | Bresenham ray-cast FOV; returns visible tile set |
 | `find_path(tiles, start, goal, blocked)` | A* used by enemy AI |
 | `enemy_turn(...)` | Move and attack with every enemy; handles all AI behaviours |
@@ -74,7 +75,7 @@ condition — sites can be cleared but the universe keeps expanding.
 | Combat | Melee | +1 melee ATK/lv |
 | Combat | Firearms | +1 ranged ATK/lv |
 | Combat | Tactics | +2% dodge/lv |
-| Technical | Engineering | Traps/tools (future item 2/4) |
+| Technical | Engineering | See traps (lv1), disarm adjacent trap with `E` (lv2) |
 | Technical | Hacking | Terminal depth (future item 3) |
 | Technical | Electronics | Radar/drones (future item 3/4) |
 | Navigation | Pilot | -1 fuel cost per 2 levels |
@@ -142,14 +143,14 @@ stubbed pending items 2/3/4).
 
 ---
 
-### 2. Traps and hazardous tiles
+### ~~2. Traps and hazardous tiles~~ ✓ DONE
 
-Place tripwire mines, acid puddles, and electric floor panels in `make_floor`. These are
-tile variants stored in a `hazards` dict on the floor alongside `items` and `enemies`.
-Stepping on a hazard triggers a status effect (acid → burn, electric → stun) and removes
-the tile (mines) or persists for N turns (puddles, panels). Rewards cautious play and makes
-Reflex/Survival skill investment tangible. The status-effect system already handles damage
-and messaging — this is purely a floor-generation and movement-handler addition.
+Tripwire mines (`^`, 1-shot, burn+dmg), acid puddles (`~`, 5-shot, burn), electric panels
+(`=`, 4-shot, stun) placed via `scatter_hazards()`. Hidden from Engineering 0 players until
+revealed by Sensor Kit or Engineering 1+ (passive visibility in FOV). `E` key disarms at
+Engineering 2+. Survival reduces effect duration; dodge_chance gives sidestep message.
+`Sensor Kit` consumable (buy from shops, 20 cr) reveals all floor hazards instantly.
+`HAZARD_DATA` dict defines all hazard properties. Floors 1-2: none; 3-5: 0-2; 6+: 1-3.
 
 ---
 
@@ -274,6 +275,7 @@ Game logic and rendering are deliberately kept separate:
 | `B` | Back to ship (floor 1 only) |
 | `I` | Equipment screen |
 | `K` | Skills screen (read-only; spend banked SP if any) |
+| `E` | Disarm adjacent/current trap (Engineering 2+ required; costs a turn) |
 | `U` | Use first consumable (grenades auto-target nearest visible enemy) |
 | `F` | Fire ranged weapon (opens targeting cursor; Tab cycles targets) |
 | `T` | Open shop (when standing in a Supply Depot) |

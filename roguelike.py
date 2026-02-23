@@ -54,6 +54,8 @@ class Item:
                 return f'+{self.fuel} Fuel'
             if self.effect == 'antidote':
                 return 'Clears effects'
+            elif self.effect == 'scan':
+                return 'Detects all traps'
             elif self.effect:
                 return f'Apply: {self.effect.capitalize()}'
             return f'Heals {self.heal} HP' if self.heal else ''
@@ -143,6 +145,7 @@ ITEM_TEMPLATES = [
     Item('Toxin Grenade',  'use',    char='!', consumable=True, effect='poison', effect_turns=4),
     Item('Stun Charge',    'use',    char='!', consumable=True, effect='stun',   effect_turns=1),
     Item('Nano-Antidote',  'use',    char='+', consumable=True, effect='antidote'),
+    Item('Sensor Kit',     'use',    char='?', consumable=True, effect='scan'),
     Item('Fuel Cell',      'use',    char='%', consumable=True, fuel=1),
     # Helmets — defence
     Item('Tactical Visor', 'helmet', dfn=1, char='^'),
@@ -178,6 +181,7 @@ SHOP_STOCK = [
     (Item('Med-Patch',       'use',    char='+', consumable=True, heal=10), 10),
     (Item('Nano-Inject',     'use',    char='+', consumable=True, heal=15), 18),
     (Item('Medkit',          'use',    char='+', consumable=True, heal=25), 25),
+    (Item('Sensor Kit',      'use',    char='?', consumable=True, effect='scan'), 20),
 ]
 
 LORE_POOL = [
@@ -439,7 +443,7 @@ SKILLS = {
     'melee':        {'name': 'Melee',        'cat': 'Combat',     'desc': 'Close-quarters combat.',           'effect': '+1 ATK/lv'},
     'firearms':     {'name': 'Firearms',     'cat': 'Combat',     'desc': 'Ranged weapon proficiency.',       'effect': '+1 rATK/lv'},
     'tactics':      {'name': 'Tactics',      'cat': 'Combat',     'desc': 'Tactical positioning and timing.', 'effect': '+2% dodge/lv'},
-    'engineering':  {'name': 'Engineering',  'cat': 'Technical',  'desc': 'Repair, craft, disarm traps.',     'effect': 'Traps/tools (future)'},
+    'engineering':  {'name': 'Engineering',  'cat': 'Technical',  'desc': 'Repair, craft, disarm traps.',     'effect': 'See traps(1) Disarm(2)'},
     'hacking':      {'name': 'Hacking',      'cat': 'Technical',  'desc': 'Terminal intrusion depth.',        'effect': 'Terminals (future)'},
     'electronics':  {'name': 'Electronics',  'cat': 'Technical',  'desc': 'Sensor arrays and drone control.', 'effect': 'Radar (future)'},
     'pilot':        {'name': 'Pilot',        'cat': 'Navigation', 'desc': 'Ship handling and navigation.',    'effect': '-1 fuel/2 lv'},
@@ -731,6 +735,35 @@ def scatter_terminals(tiles, n=2, exclude=(), floor_num=1):
     return result
 
 
+HAZARD_DATA = {
+    'mine':     {'char': '^', 'effect': 'burn',  'effect_turns': 3, 'dmg': 8, 'triggers': 1},
+    'acid':     {'char': '~', 'effect': 'burn',  'effect_turns': 3, 'dmg': 0, 'triggers': 5},
+    'electric': {'char': '=', 'effect': 'stun',  'effect_turns': 2, 'dmg': 0, 'triggers': 4},
+}
+
+
+def scatter_hazards(tiles, floor_num, n=0, exclude=()):
+    """Place hazard tiles. Returns {(x,y): hazard_dict} or {} if n=0."""
+    if n <= 0:
+        return {}
+    hazard_types   = ['mine', 'acid', 'electric']
+    hazard_weights = [40, 30, 30]
+    floors    = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
+                 if tiles[y][x] == FLOOR and (x, y) not in exclude]
+    positions = random.sample(floors, min(n, len(floors)))
+    result = {}
+    for pos in positions:
+        htype = random.choices(hazard_types, weights=hazard_weights)[0]
+        hdata = HAZARD_DATA[htype]
+        result[pos] = {
+            'type':          htype,
+            'char':          hdata['char'],
+            'triggers_left': hdata['triggers'],
+            'revealed':      False,
+        }
+    return result
+
+
 def scatter_special_rooms(tiles, rooms, floor_num, is_final=False):
     """Pick interior rooms and assign special types. Returns dict keyed by int -> spec dict."""
     if is_final:
@@ -817,6 +850,16 @@ def make_floor(floor_num, theme_fn=None, enemy_density=1.0, is_final=False, plac
         if pos in all_special_tiles:
             del terminals[pos]
 
+    if floor_num <= 2:
+        n_hazards = 0
+    elif floor_num <= 5:
+        n_hazards = random.randint(0, 2)
+    else:
+        n_hazards = random.randint(1, 3)
+    hazards = scatter_hazards(
+        tiles, floor_num, n=n_hazards,
+        exclude=exclude_set | set(enemies) | set(items) | all_special_tiles)
+
     return {
         'tiles':         tiles,
         'start':         start,
@@ -827,6 +870,7 @@ def make_floor(floor_num, theme_fn=None, enemy_density=1.0, is_final=False, plac
         'terminals':     terminals,
         'explored':      set(),
         'special_rooms': special_rooms,
+        'hazards':       hazards,
     }
 
 
@@ -938,6 +982,7 @@ COLOR_ENEMY_RANGE  = 16 # cyan        — Gunner
 COLOR_ENEMY_FAST   = 17 # yellow      — Lurker
 COLOR_ENEMY_BRUTE  = 18 # white       — Brute
 COLOR_ENEMY_EXPL   = 19 # magenta     — Exploder
+COLOR_HAZARD       = 20 # red         — danger tiles
 
 
 def setup_colors():
@@ -962,6 +1007,7 @@ def setup_colors():
     curses.init_pair(COLOR_ENEMY_FAST,   curses.COLOR_YELLOW,  -1)
     curses.init_pair(COLOR_ENEMY_BRUTE,  curses.COLOR_WHITE,   -1)
     curses.init_pair(COLOR_ENEMY_EXPL,   curses.COLOR_MAGENTA, -1)
+    curses.init_pair(COLOR_HAZARD,       curses.COLOR_RED,     -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, floor_name=None):
@@ -1026,7 +1072,7 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies=None, log=None,
          terminals=None, target_line=None, target_pos=None, special_rooms=None,
-         max_floor=MAX_FLOOR, theme_override=None):
+         max_floor=MAX_FLOOR, theme_override=None, hazards=None):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -1089,6 +1135,16 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                           'exploder': COLOR_ENEMY_EXPL,
                          }.get(e.behaviour, COLOR_ENEMY)
                     attr = curses.color_pair(cp) | curses.A_BOLD
+                elif hazards and (mx, my) in hazards:
+                    h = hazards[(mx, my)]
+                    if player.skills.get('engineering', 0) >= 1 or h['revealed']:
+                        ch   = h['char']
+                        attr = curses.color_pair(COLOR_HAZARD) | curses.A_BOLD
+                    else:
+                        ch   = FLOOR
+                        attr = (curses.color_pair(COLOR_SPECIAL) | curses.A_DIM
+                                if (mx, my) in special_tile_set
+                                else curses.color_pair(COLOR_FLOOR) | curses.A_DIM)
                 else:
                     ch   = FLOOR
                     if (mx, my) in special_tile_set:
@@ -1106,6 +1162,14 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                 elif terminals and (mx, my) in terminals:
                     ch   = 'T'
                     attr = curses.color_pair(COLOR_TERMINAL) | curses.A_DIM
+                elif hazards and (mx, my) in hazards:
+                    h = hazards[(mx, my)]
+                    if player.skills.get('engineering', 0) >= 1 or h['revealed']:
+                        ch   = h['char']
+                        attr = curses.color_pair(COLOR_HAZARD) | curses.A_DIM
+                    else:
+                        ch   = tiles[my][mx]
+                        attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
                 elif tiles[my][mx] == WALL:
                     ch   = WALL
                     attr = wall_attr | curses.A_DIM
@@ -1133,7 +1197,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                max_floor=max_floor, floor_name=theme['name'])
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  U:use  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  E:disarm  U:use  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -1683,7 +1747,7 @@ def show_terminal(stdscr, terminal):
 
 def show_targeting(stdscr, tiles, px, py, player, visible, explored,
                    items_on_map, stair_up, stair_down, current_floor,
-                   enemies_on_map, log, terminals_on_map=None):
+                   enemies_on_map, log, terminals_on_map=None, hazards_on_map=None):
     """Targeting cursor for ranged attack.
     Tab cycles targets. Enter fires. Esc/F cancels.
     Returns (target_pos, enemy) or (None, None)."""
@@ -1717,7 +1781,8 @@ def show_targeting(stdscr, tiles, px, py, player, visible, explored,
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, hint_log,
-             terminals=terminals_on_map, target_line=line_tiles, target_pos=target_pos)
+             terminals=terminals_on_map, target_line=line_tiles, target_pos=target_pos,
+             hazards=hazards_on_map)
 
         key = stdscr.getch()
 
@@ -2582,6 +2647,7 @@ def run_site(stdscr, site, player):
     stair_up         = floor_data['stair_up']
     stair_down       = floor_data['stair_down']
     explored         = floor_data['explored']
+    hazards_on_map   = floor_data.get('hazards', {})
 
     log     = collections.deque(maxlen=LOG_LINES)
     visible = compute_fov(tiles, px, py, player.fov_radius)
@@ -2593,7 +2659,8 @@ def run_site(stdscr, site, player):
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies_on_map, log,
          terminals=terminals_on_map, special_rooms=special_rooms,
-         max_floor=site.depth, theme_override=current_theme)
+         max_floor=site.depth, theme_override=current_theme,
+         hazards=hazards_on_map)
 
     MOVE_KEYS = {
         ord('w'):         ( 0, -1),
@@ -2636,6 +2703,36 @@ def run_site(stdscr, site, player):
         if key in (ord('k'), ord('K')):
             show_skills_screen(stdscr, player)
 
+        if key in (ord('e'), ord('E')):
+            if 'stun' in player.active_effects:
+                log.appendleft("You are stunned and cannot act!")
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                for em in e_msgs:
+                    log.appendleft(em)
+            else:
+                eng = player.skills.get('engineering', 0)
+                if eng >= 2:
+                    candidates = [(px + dx, py + dy)
+                                  for dx, dy in [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]]
+                    found = [(pos, hazards_on_map[pos]) for pos in candidates
+                             if pos in hazards_on_map
+                             and (eng >= 1 or hazards_on_map[pos]['revealed'])]
+                    if found:
+                        pos, h = found[0]
+                        del hazards_on_map[pos]
+                        log.appendleft(f"Engineering: {h['type']} trap disarmed.")
+                        for msg in tick_effects(player, "You"):
+                            log.appendleft(msg)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                        for em in e_msgs:
+                            log.appendleft(em)
+                    else:
+                        log.appendleft("No visible trap nearby to disarm.")
+                else:
+                    log.appendleft("Engineering 2+ required to disarm traps.")
+
         if key in (ord('u'), ord('U')):
             consumables = [i for i in player.inventory if i.consumable]
             if consumables:
@@ -2650,6 +2747,12 @@ def run_site(stdscr, site, player):
                         log.appendleft(f"{target.name} is hit — {item.effect}!")
                     else:
                         log.appendleft("No visible target.")
+                elif item.effect == 'scan':
+                    for h in hazards_on_map.values():
+                        h['revealed'] = True
+                    n = len(hazards_on_map)
+                    log.appendleft(f"Used {item.name}: "
+                                   f"{'%d hazard(s) marked.' % n if n else 'no hazards here.'}")
                 player.inventory.remove(item)
             else:
                 log.appendleft("No consumables in inventory.")
@@ -2682,7 +2785,7 @@ def run_site(stdscr, site, player):
                     target_pos, _ = show_targeting(
                         stdscr, tiles, px, py, player, visible, explored,
                         items_on_map, stair_up, stair_down, current_floor,
-                        enemies_on_map, log, terminals_on_map)
+                        enemies_on_map, log, terminals_on_map, hazards_on_map)
                     if target_pos is not None:
                         tx, ty  = target_pos
                         hit_pos = None
@@ -2725,7 +2828,7 @@ def run_site(stdscr, site, player):
                                          items_on_map, stair_up, stair_down, current_floor,
                                          enemies_on_map, log, terminals=terminals_on_map,
                                          special_rooms=special_rooms, max_floor=site.depth,
-                                         theme_override=current_theme)
+                                         theme_override=current_theme, hazards=hazards_on_map)
                                     show_terminal(stdscr, WIN_TERMINAL)
                                     site.cleared = True
                                     return 'escaped'
@@ -2777,7 +2880,7 @@ def run_site(stdscr, site, player):
                                  items_on_map, stair_up, stair_down, current_floor,
                                  enemies_on_map, log, terminals=terminals_on_map,
                                  special_rooms=special_rooms, max_floor=site.depth,
-                                 theme_override=current_theme)
+                                 theme_override=current_theme, hazards=hazards_on_map)
                             show_terminal(stdscr, WIN_TERMINAL)
                             site.cleared = True
                             return 'escaped'
@@ -2789,6 +2892,24 @@ def run_site(stdscr, site, player):
                             f"{enemy.name} hits back for {edm}.")
                 elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
                     px, py = nx, ny
+
+                    if (px, py) in hazards_on_map:
+                        hazard = hazards_on_map[(px, py)]
+                        hdata  = HAZARD_DATA[hazard['type']]
+                        if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
+                            log.appendleft(f"You sense danger — sidestep the {hazard['type']}!")
+                        else:
+                            if hdata['dmg']:
+                                dmg = hdata['dmg'] + current_floor
+                                player.hp -= dmg
+                                log.appendleft(f"{hazard['type'].capitalize()} detonates! -{dmg} HP!")
+                            apply_effect(player, hdata['effect'], hdata['effect_turns'])
+                            log.appendleft(
+                                f"{hazard['type'].capitalize()} — {hdata['effect']} {hdata['effect_turns']}t!")
+                            hazard['triggers_left'] -= 1
+                            if hazard['triggers_left'] <= 0:
+                                del hazards_on_map[(px, py)]
+
                     n_lv, _ = player.gain_xp(1)
                     for _ in range(n_lv):
                         show_levelup_modal(stdscr, player)
@@ -2877,6 +2998,7 @@ def run_site(stdscr, site, player):
                         stair_up         = floor_data['stair_up']
                         stair_down       = floor_data['stair_down']
                         explored         = floor_data['explored']
+                        hazards_on_map   = floor_data.get('hazards', {})
                         current_theme    = theme_fn(current_floor)
                         arrival = current_theme.get('msg')
                         log.appendleft(f"You descend to floor {current_floor}.")
@@ -2894,6 +3016,7 @@ def run_site(stdscr, site, player):
                         stair_up         = floor_data['stair_up']
                         stair_down       = floor_data['stair_down']
                         explored         = floor_data['explored']
+                        hazards_on_map   = floor_data.get('hazards', {})
                         current_theme    = theme_fn(current_floor)
                         log.appendleft(f"You ascend to floor {current_floor}.")
 
@@ -2909,13 +3032,15 @@ def run_site(stdscr, site, player):
             draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                  stair_up, stair_down, current_floor, enemies_on_map, log,
                  terminals=terminals_on_map, special_rooms=special_rooms,
-                 max_floor=site.depth, theme_override=current_theme)
+                 max_floor=site.depth, theme_override=current_theme,
+                 hazards=hazards_on_map)
             return 'dead'
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, log,
              terminals=terminals_on_map, special_rooms=special_rooms,
-             max_floor=site.depth, theme_override=current_theme)
+             max_floor=site.depth, theme_override=current_theme,
+             hazards=hazards_on_map)
 
 
 def show_ship_screen(stdscr, player, sites):
