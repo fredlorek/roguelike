@@ -34,18 +34,25 @@ class Room:
 
 
 class Item:
-    def __init__(self, name, slot, atk=0, dfn=0, char='!', consumable=False, heal=0, ranged=False):
-        self.name       = name   # display name
-        self.slot       = slot   # 'weapon', 'armor', or 'use'
-        self.atk        = atk
-        self.dfn        = dfn
-        self.char       = char   # glyph on map
-        self.consumable = consumable
-        self.heal       = heal
-        self.ranged     = ranged
+    def __init__(self, name, slot, atk=0, dfn=0, char='!', consumable=False, heal=0, ranged=False,
+                 effect=None, effect_turns=0):
+        self.name         = name   # display name
+        self.slot         = slot   # 'weapon', 'armor', or 'use'
+        self.atk          = atk
+        self.dfn          = dfn
+        self.char         = char   # glyph on map
+        self.consumable   = consumable
+        self.heal         = heal
+        self.ranged       = ranged
+        self.effect       = effect
+        self.effect_turns = effect_turns
 
     def stat_str(self):
         if self.consumable:
+            if self.effect == 'antidote':
+                return 'Clears effects'
+            elif self.effect:
+                return f'Apply: {self.effect.capitalize()}'
             return f'Heals {self.heal} HP' if self.heal else ''
         parts = []
         if self.atk: parts.append(f'+{self.atk} ATK')
@@ -54,6 +61,13 @@ class Item:
         return '  '.join(parts)
 
     def use(self, player):
+        if self.effect == 'antidote':
+            if player.active_effects:
+                player.active_effects.clear()
+                return f"Used {self.name}: all effects cleared."
+            return f"Used {self.name}: no effects to clear."
+        if self.effect in ('poison', 'burn', 'stun'):
+            return f"Threw {self.name}."   # enemy targeting handled in main loop
         if self.heal:
             restored = min(self.heal, player.max_hp - player.hp)
             player.hp = min(player.max_hp, player.hp + self.heal)
@@ -78,6 +92,9 @@ ITEM_TEMPLATES = [
     Item('Med-Patch',      'use',    char='+', consumable=True, heal=10),
     Item('Medkit',         'use',    char='+', consumable=True, heal=25),
     Item('Nano-Inject',    'use',    char='+', consumable=True, heal=15),
+    Item('Toxin Grenade',  'use',    char='!', consumable=True, effect='poison', effect_turns=4),
+    Item('Stun Charge',    'use',    char='!', consumable=True, effect='stun',   effect_turns=1),
+    Item('Nano-Antidote',  'use',    char='+', consumable=True, effect='antidote'),
     # Helmets — defence
     Item('Tactical Visor', 'helmet', dfn=1, char='^'),
     Item('Combat Helm',    'helmet', dfn=2, char='^'),
@@ -367,6 +384,17 @@ STAT_MIN         = 1
 STAT_MAX         = 15
 POINT_BUY_POINTS = 10
 
+EFFECT_DAMAGE   = {'poison': 2, 'burn': 3}    # HP lost per turn
+EFFECT_DURATION = {'poison': 4, 'burn': 3, 'stun': 1}
+
+# enemy_name → (effect, turns, hit_chance 0–1)
+ENEMY_ON_HIT = {
+    'Stalker': ('poison', 4, 0.20),
+    'Gunner':  ('burn',   3, 0.25),
+    'Sentry':  ('stun',   1, 0.15),
+    'Brute':   ('stun',   1, 0.25),
+}
+
 RACES = {
     'Human':   {'desc': 'Adaptable and resourceful. Bonuses across all stats.',
                 'mods': {'body': 1, 'reflex': 1, 'mind': 1, 'tech': 1, 'presence': 1}},
@@ -413,6 +441,7 @@ class Player:
         self.inventory  = []
         self.equipment  = {s: None for s in self.SLOTS}
         self.credits    = 0
+        self.active_effects = {}   # effect_name -> remaining_turns
 
     @property
     def atk(self):
@@ -450,14 +479,14 @@ class Player:
 
     def gain_xp(self, amount):
         self.xp += int(amount * self.xp_gain_multiplier)
-        leveled = False
+        levels_gained = 0
         while self.xp >= self.xp_next:
             self.xp    -= self.xp_next
             self.level += 1
-            self.max_hp += 5
-            self.hp     = self.max_hp
-            leveled = True
-        return f"Level up! You are now level {self.level}. Full HP restored." if leveled else None
+            levels_gained += 1
+        if levels_gained:
+            return levels_gained, f"Level up! You are now level {self.level}."
+        return 0, None
 
     def pickup(self, item):
         if len(self.inventory) >= MAX_INVENTORY:
@@ -491,6 +520,7 @@ class Enemy:
         self.boss      = boss
         self.behaviour = behaviour
         self.cooldown  = 0
+        self.active_effects = {}
 
 
 ENEMY_TEMPLATES = [
@@ -875,6 +905,12 @@ def draw_panel(stdscr, player, col, rows, current_floor):
         (None, 0),                                          # blank
         ("[I] Equipment",                                   panel_attr),
     ]
+
+    if player.active_effects:
+        abbr = {'poison': 'Psn', 'burn': 'Brn', 'stun': 'Stn'}
+        parts = [f"{abbr.get(e, e)}({t}t)" for e, t in player.active_effects.items()]
+        fx_text = ("FX: " + " ".join(parts))[:PANEL_W - 1]
+        lines.insert(14, (fx_text, curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD))
 
     for row in range(rows):
         try:
@@ -1802,6 +1838,129 @@ def show_character_creation(stdscr):
                 )
 
 
+def apply_effect(entity, effect, turns):
+    """Apply or refresh a status effect (keeps max remaining turns)."""
+    entity.active_effects[effect] = max(entity.active_effects.get(effect, 0), turns)
+
+
+def tick_effects(entity, label):
+    """Tick active effects one turn. Returns list of message strings."""
+    msgs = []
+    expired = []
+    for effect, turns in list(entity.active_effects.items()):
+        if effect in EFFECT_DAMAGE:
+            dmg = EFFECT_DAMAGE[effect]
+            entity.hp -= dmg
+            msgs.append(f"{label} takes {dmg} {effect} damage!")
+        entity.active_effects[effect] = turns - 1
+        if turns - 1 <= 0:
+            expired.append(effect)
+    for e in expired:
+        del entity.active_effects[e]
+        msgs.append(f"{label} is no longer affected by {e}.")
+    return msgs
+
+
+def show_levelup_modal(stdscr, player):
+    """Modal overlay for choosing a stat to increase on level-up. No cancel — must pick."""
+    STAT_DESC = {
+        'body':     '+HP / ATK',
+        'reflex':   '+dodge',
+        'mind':     '+XP / FOV',
+        'tech':     '+ranged',
+        'presence': '+intimidate',
+    }
+    BOX_W      = 34
+    BOX_H      = 13
+    panel_attr = curses.color_pair(COLOR_PANEL)
+    hi_attr    = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+    head_attr  = panel_attr | curses.A_BOLD
+
+    term_h, term_w = stdscr.getmaxyx()
+    box_y = max(0, (term_h - BOX_H) // 2)
+    box_x = max(0, (term_w - BOX_W) // 2)
+
+    cursor = 0
+
+    def _draw():
+        # Border
+        try:
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, panel_attr)
+        except curses.error:
+            pass
+        for ry in range(1, BOX_H - 1):
+            try:
+                stdscr.addch(box_y + ry, box_x, curses.ACS_VLINE, panel_attr)
+                stdscr.addch(box_y + ry, box_x + BOX_W - 1, curses.ACS_VLINE, panel_attr)
+            except curses.error:
+                pass
+        try:
+            stdscr.addch(box_y + BOX_H - 1, box_x, curses.ACS_LLCORNER, panel_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(box_y + BOX_H - 1, box_x + bx, curses.ACS_HLINE, panel_attr)
+            stdscr.addch(box_y + BOX_H - 1, box_x + BOX_W - 1, curses.ACS_LRCORNER, panel_attr)
+        except curses.error:
+            pass
+
+        # Title row
+        title = f"  LEVEL UP!  Rank -> {player.level}  "
+        try:
+            stdscr.addstr(box_y + 1, box_x + 1, title[:BOX_W - 2].center(BOX_W - 2), head_attr)
+        except curses.error:
+            pass
+
+        # Prompt row
+        try:
+            stdscr.addstr(box_y + 3, box_x + 1,
+                          "  Choose a stat to increase:  "[:BOX_W - 2],
+                          panel_attr)
+        except curses.error:
+            pass
+
+        # Stat rows (rows 5-9)
+        for i, stat in enumerate(STATS):
+            row = box_y + 5 + i
+            val = getattr(player, stat)
+            label = STAT_LABELS[i]
+            desc  = STAT_DESC[stat]
+            prefix = '>' if i == cursor else ' '
+            line = f" {prefix} {label:<9}{val:>2}  {desc}"
+            attr = hi_attr if i == cursor else panel_attr
+            try:
+                stdscr.addstr(row, box_x + 1, line[:BOX_W - 2].ljust(BOX_W - 2), attr)
+            except curses.error:
+                pass
+
+        # Footer
+        try:
+            stdscr.addstr(box_y + 11, box_x + 1,
+                          "  W/S: select   Enter: pick  "[:BOX_W - 2].center(BOX_W - 2),
+                          panel_attr)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+
+    while True:
+        _draw()
+        key = stdscr.getch()
+        if key in (ord('w'), ord('W'), curses.KEY_UP):
+            cursor = (cursor - 1) % len(STATS)
+        elif key in (ord('s'), ord('S'), curses.KEY_DOWN):
+            cursor = (cursor + 1) % len(STATS)
+        elif key in (ord('\n'), curses.KEY_ENTER, 10, 13):
+            stat_name = STATS[cursor]
+            new_val = min(STAT_MAX, getattr(player, stat_name) + 1)
+            setattr(player, stat_name, new_val)
+            if stat_name == 'body':
+                player.max_hp = 20 + player.body * 2
+            player.hp = player.max_hp
+            break
+
+
 def enemy_turn(enemies, tiles, px, py, visible, player):
     """Move and attack with every enemy. Returns list of combat message strings."""
     msgs       = []
@@ -1841,6 +2000,11 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
             dmg = max(1, enemy.atk - player.dfn)
             player.hp -= dmg
             msgs.append(f"{enemy.name} hits you for {dmg}!")
+            on_hit = ENEMY_ON_HIT.get(enemy.name)
+            if on_hit and random.random() < on_hit[2]:
+                effect, turns, _ = on_hit
+                apply_effect(player, effect, turns)
+                msgs.append(f"{enemy.name}'s attack inflicts {effect}!")
         return True
 
     def _astar_step(enemy, epos):
@@ -1866,6 +2030,15 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
         if intimidate_chance > 0 and epos in visible:
             if random.randint(1, 100) <= intimidate_chance:
                 continue
+
+        if enemy.active_effects:
+            effect_msgs = tick_effects(enemy, enemy.name)
+            msgs.extend(effect_msgs)
+            if enemy.hp <= 0:
+                del enemies[epos]
+                continue
+            if 'stun' in enemy.active_effects:
+                continue   # stunned enemy skips its turn
 
         behaviour = enemy.behaviour
 
@@ -1902,6 +2075,11 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
                         dmg = max(1, enemy.atk - player.dfn)
                         player.hp -= dmg
                         msgs.append(f"{enemy.name} fires at you for {dmg}!")
+                        on_hit = ENEMY_ON_HIT.get(enemy.name)
+                        if on_hit and random.random() < on_hit[2]:
+                            effect, turns, _ = on_hit
+                            apply_effect(player, effect, turns)
+                            msgs.append(f"{enemy.name}'s attack inflicts {effect}!")
             else:
                 _random_walk(enemy, epos)
             continue
@@ -2065,6 +2243,14 @@ def main(stdscr):
             if consumables:
                 item = consumables[0]
                 log.appendleft(item.use(player))
+                if item.effect in ('poison', 'burn', 'stun'):
+                    targets = [(pos, e) for pos, e in enemies_on_map.items() if pos in visible]
+                    if targets:
+                        tpos, target = min(targets, key=lambda pe: abs(pe[0][0]-px)+abs(pe[0][1]-py))
+                        apply_effect(target, item.effect, item.effect_turns)
+                        log.appendleft(f"{target.name} is hit — {item.effect}!")
+                    else:
+                        log.appendleft("No visible target.")
                 player.inventory.remove(item)
             else:
                 log.appendleft("No consumables in inventory.")
@@ -2082,10 +2268,18 @@ def main(stdscr):
                 log.appendleft("No shop here.")
 
         if key in (ord('f'), ord('F')):
-            weapon = player.equipment.get('weapon')
-            if not weapon or not weapon.ranged:
-                log.appendleft("No ranged weapon equipped.")
+            if 'stun' in player.active_effects:
+                log.appendleft("You are stunned and cannot fire!")
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                for em in e_msgs:
+                    log.appendleft(em)
             else:
+              weapon = player.equipment.get('weapon')
+              if not weapon or not weapon.ranged:
+                log.appendleft("No ranged weapon equipped.")
+              else:
                 target_pos, _ = show_targeting(
                     stdscr, tiles, px, py, player, visible, explored,
                     items_on_map, stair_up, stair_down, current_floor,
@@ -2117,7 +2311,7 @@ def main(stdscr):
                                     log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
                                 else:
                                     log.appendleft(f"{enemy.name} detonates!")
-                            lvl_msg = player.gain_xp(enemy.xp_reward)
+                            n_lv, lvl_msg = player.gain_xp(enemy.xp_reward)
                             cr_drop = max(1, enemy.xp_reward // 2)
                             player.credits += cr_drop
                             log.appendleft(
@@ -2125,6 +2319,8 @@ def main(stdscr):
                                 f"{enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
                             if lvl_msg:
                                 log.appendleft(lvl_msg)
+                            for _ in range(n_lv):
+                                show_levelup_modal(stdscr, player)
                             if enemy.boss:
                                 won = True
                         else:
@@ -2138,139 +2334,155 @@ def main(stdscr):
                         log.appendleft(em)
 
         if key in MOVE_KEYS:
-            dx, dy = MOVE_KEYS[key]
-            nx, ny = px + dx, py + dy
-            if (nx, ny) in enemies_on_map:
-                enemy = enemies_on_map[(nx, ny)]
-                dmg = max(1, player.atk - enemy.dfn)
-                enemy.hp -= dmg
-                if enemy.hp <= 0:
-                    del enemies_on_map[(nx, ny)]
-                    if enemy.behaviour == 'exploder':
-                        splash = max(1, int(enemy.atk * 0.5))
-                        player.hp -= splash
-                        log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
-                    lvl_msg = player.gain_xp(enemy.xp_reward)
-                    cr_drop = max(1, enemy.xp_reward // 2)
-                    player.credits += cr_drop
-                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
-                    if lvl_msg:
-                        log.appendleft(lvl_msg)
-                    if enemy.boss:
-                        won = True
-                else:
-                    edm = max(1, enemy.atk - player.dfn)
-                    player.hp -= edm
-                    log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} hits back for {edm}.")
-            elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
-                px, py = nx, ny
-                player.gain_xp(1)
-                if (px, py) in items_on_map:
-                    picked = items_on_map[(px, py)]
-                    if player.pickup(picked):
-                        items_on_map.pop((px, py))
-                        log.appendleft(f"Picked up {picked.name}.")
+            if 'stun' in player.active_effects:
+                log.appendleft("You are stunned and cannot act!")
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                for em in e_msgs:
+                    log.appendleft(em)
+            else:
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                dx, dy = MOVE_KEYS[key]
+                nx, ny = px + dx, py + dy
+                if (nx, ny) in enemies_on_map:
+                    enemy = enemies_on_map[(nx, ny)]
+                    dmg = max(1, player.atk - enemy.dfn)
+                    enemy.hp -= dmg
+                    if enemy.hp <= 0:
+                        del enemies_on_map[(nx, ny)]
+                        if enemy.behaviour == 'exploder':
+                            splash = max(1, int(enemy.atk * 0.5))
+                            player.hp -= splash
+                            log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
+                        n_lv, lvl_msg = player.gain_xp(enemy.xp_reward)
+                        cr_drop = max(1, enemy.xp_reward // 2)
+                        player.credits += cr_drop
+                        log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
+                        if lvl_msg:
+                            log.appendleft(lvl_msg)
+                        for _ in range(n_lv):
+                            show_levelup_modal(stdscr, player)
+                        if enemy.boss:
+                            won = True
                     else:
-                        log.appendleft("Inventory full.")
+                        edm = max(1, enemy.atk - player.dfn)
+                        player.hp -= edm
+                        log.appendleft(f"You hit {enemy.name} for {dmg}. {enemy.name} hits back for {edm}.")
+                elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
+                    px, py = nx, ny
+                    n_lv, _ = player.gain_xp(1)
+                    for _ in range(n_lv):
+                        show_levelup_modal(stdscr, player)
+                    if (px, py) in items_on_map:
+                        picked = items_on_map[(px, py)]
+                        if player.pickup(picked):
+                            items_on_map.pop((px, py))
+                            log.appendleft(f"Picked up {picked.name}.")
+                        else:
+                            log.appendleft("Inventory full.")
 
-                if (px, py) in terminals_on_map:
-                    t = terminals_on_map[(px, py)]
-                    if not t.read:
-                        log.appendleft(f"Terminal: {t.title[:44]}")
-                        show_terminal(stdscr, t)
-                        # Tech bonus: +5 XP per tech point above 5
-                        tech_xp = max(0, (player.tech - 5) * 5)
-                        if tech_xp:
-                            lvl_msg = player.gain_xp(tech_xp)
-                            log.appendleft(f"Tech interface: +{tech_xp} XP")
-                            if lvl_msg:
-                                log.appendleft(lvl_msg)
-                    else:
-                        log.appendleft(f"[already read] {t.title[:38]}")
+                    if (px, py) in terminals_on_map:
+                        t = terminals_on_map[(px, py)]
+                        if not t.read:
+                            log.appendleft(f"Terminal: {t.title[:44]}")
+                            show_terminal(stdscr, t)
+                            # Tech bonus: +5 XP per tech point above 5
+                            tech_xp = max(0, (player.tech - 5) * 5)
+                            if tech_xp:
+                                n_lv, lvl_msg = player.gain_xp(tech_xp)
+                                log.appendleft(f"Tech interface: +{tech_xp} XP")
+                                if lvl_msg:
+                                    log.appendleft(lvl_msg)
+                                for _ in range(n_lv):
+                                    show_levelup_modal(stdscr, player)
+                        else:
+                            log.appendleft(f"[already read] {t.title[:38]}")
 
-                # Special room entry
-                for sroom in special_rooms.values():
-                    if (px, py) in sroom['tiles']:
-                        rtype = sroom['type']
-                        if not sroom['triggered']:
-                            sroom['triggered'] = True
-                            if rtype == 'shop':
-                                log.appendleft("SUPPLY DEPOT — [T] to trade.")
-                            elif rtype == 'armory':
-                                gear = [it for it in ITEM_TEMPLATES
-                                        if it.slot in ('weapon', 'armor', 'helmet', 'gloves', 'boots')]
-                                avail = list(sroom['tiles'] - {(px, py)})
-                                for pos in random.sample(avail, min(3, len(avail))):
-                                    items_on_map[pos] = copy.copy(random.choice(gear))
-                                log.appendleft("ARMORY — Equipment available.")
-                            elif rtype == 'medbay':
-                                player.hp = player.max_hp
-                                heals = [it for it in ITEM_TEMPLATES if it.consumable]
-                                avail = list(sroom['tiles'] - {(px, py)})
-                                for pos in random.sample(avail, min(2, len(avail))):
-                                    items_on_map[pos] = copy.copy(random.choice(heals))
-                                log.appendleft("MED BAY — HP restored. Supplies found.")
-                            elif rtype == 'terminal_hub':
-                                hub_lore = (random.sample(LORE_POOL, 1) +
-                                            [generate_terminal(current_floor) for _ in range(2)])
-                                avail    = list(sroom['tiles'] - {(px, py)})
-                                for pos, (title, lines) in zip(
-                                        random.sample(avail, min(3, len(avail))), hub_lore):
-                                    terminals_on_map[pos] = Terminal(title, lines)
-                                log.appendleft("TERMINAL HUB — Data nodes online.")
-                            elif rtype == 'vault':
-                                cost = 50
-                                if show_vault_prompt(stdscr, cost, player.credits):
-                                    if player.credits >= cost:
-                                        player.credits -= cost
-                                        rare  = [it for it in ITEM_TEMPLATES
-                                                 if it.atk >= 3 or it.dfn >= 3]
-                                        avail = list(sroom['tiles'] - {(px, py)})
-                                        for pos in random.sample(avail, min(4, len(avail))):
-                                            items_on_map[pos] = copy.copy(random.choice(rare))
-                                        log.appendleft("VAULT OPENED. Rare gear inside.")
+                    # Special room entry
+                    for sroom in special_rooms.values():
+                        if (px, py) in sroom['tiles']:
+                            rtype = sroom['type']
+                            if not sroom['triggered']:
+                                sroom['triggered'] = True
+                                if rtype == 'shop':
+                                    log.appendleft("SUPPLY DEPOT — [T] to trade.")
+                                elif rtype == 'armory':
+                                    gear = [it for it in ITEM_TEMPLATES
+                                            if it.slot in ('weapon', 'armor', 'helmet', 'gloves', 'boots')]
+                                    avail = list(sroom['tiles'] - {(px, py)})
+                                    for pos in random.sample(avail, min(3, len(avail))):
+                                        items_on_map[pos] = copy.copy(random.choice(gear))
+                                    log.appendleft("ARMORY — Equipment available.")
+                                elif rtype == 'medbay':
+                                    player.hp = player.max_hp
+                                    heals = [it for it in ITEM_TEMPLATES if it.consumable]
+                                    avail = list(sroom['tiles'] - {(px, py)})
+                                    for pos in random.sample(avail, min(2, len(avail))):
+                                        items_on_map[pos] = copy.copy(random.choice(heals))
+                                    log.appendleft("MED BAY — HP restored. Supplies found.")
+                                elif rtype == 'terminal_hub':
+                                    hub_lore = (random.sample(LORE_POOL, 1) +
+                                                [generate_terminal(current_floor) for _ in range(2)])
+                                    avail    = list(sroom['tiles'] - {(px, py)})
+                                    for pos, (title, lines) in zip(
+                                            random.sample(avail, min(3, len(avail))), hub_lore):
+                                        terminals_on_map[pos] = Terminal(title, lines)
+                                    log.appendleft("TERMINAL HUB — Data nodes online.")
+                                elif rtype == 'vault':
+                                    cost = 50
+                                    if show_vault_prompt(stdscr, cost, player.credits):
+                                        if player.credits >= cost:
+                                            player.credits -= cost
+                                            rare  = [it for it in ITEM_TEMPLATES
+                                                     if it.atk >= 3 or it.dfn >= 3]
+                                            avail = list(sroom['tiles'] - {(px, py)})
+                                            for pos in random.sample(avail, min(4, len(avail))):
+                                                items_on_map[pos] = copy.copy(random.choice(rare))
+                                            log.appendleft("VAULT OPENED. Rare gear inside.")
+                                        else:
+                                            sroom['triggered'] = False
+                                            log.appendleft("Insufficient credits.")
                                     else:
                                         sroom['triggered'] = False
-                                        log.appendleft("Insufficient credits.")
-                                else:
-                                    sroom['triggered'] = False
-                        break
+                            break
 
-                if (px, py) == stair_down:
-                    current_floor += 1
-                    if current_floor not in floors:
-                        floors[current_floor] = make_floor(current_floor)
-                    floor_data       = floors[current_floor]
-                    tiles            = floor_data['tiles']
-                    px, py           = floor_data['start']
-                    items_on_map     = floor_data['items']
-                    enemies_on_map   = floor_data['enemies']
-                    terminals_on_map = floor_data['terminals']
-                    special_rooms    = floor_data.get('special_rooms', {})
-                    stair_up         = floor_data['stair_up']
-                    stair_down       = floor_data['stair_down']
-                    explored         = floor_data['explored']
-                    arrival = get_theme(current_floor)['msg']
-                    log.appendleft(f"You descend to floor {current_floor}.")
-                    if arrival:
-                        log.appendleft(arrival)
-                elif stair_up and (px, py) == stair_up:
-                    current_floor -= 1
-                    floor_data       = floors[current_floor]
-                    tiles            = floor_data['tiles']
-                    px, py           = floor_data['stair_down']
-                    items_on_map     = floor_data['items']
-                    enemies_on_map   = floor_data['enemies']
-                    terminals_on_map = floor_data['terminals']
-                    special_rooms    = floor_data.get('special_rooms', {})
-                    stair_up         = floor_data['stair_up']
-                    stair_down       = floor_data['stair_down']
-                    explored         = floor_data['explored']
-                    log.appendleft(f"You ascend to floor {current_floor}.")
+                    if (px, py) == stair_down:
+                        current_floor += 1
+                        if current_floor not in floors:
+                            floors[current_floor] = make_floor(current_floor)
+                        floor_data       = floors[current_floor]
+                        tiles            = floor_data['tiles']
+                        px, py           = floor_data['start']
+                        items_on_map     = floor_data['items']
+                        enemies_on_map   = floor_data['enemies']
+                        terminals_on_map = floor_data['terminals']
+                        special_rooms    = floor_data.get('special_rooms', {})
+                        stair_up         = floor_data['stair_up']
+                        stair_down       = floor_data['stair_down']
+                        explored         = floor_data['explored']
+                        arrival = get_theme(current_floor)['msg']
+                        log.appendleft(f"You descend to floor {current_floor}.")
+                        if arrival:
+                            log.appendleft(arrival)
+                    elif stair_up and (px, py) == stair_up:
+                        current_floor -= 1
+                        floor_data       = floors[current_floor]
+                        tiles            = floor_data['tiles']
+                        px, py           = floor_data['stair_down']
+                        items_on_map     = floor_data['items']
+                        enemies_on_map   = floor_data['enemies']
+                        terminals_on_map = floor_data['terminals']
+                        special_rooms    = floor_data.get('special_rooms', {})
+                        stair_up         = floor_data['stair_up']
+                        stair_down       = floor_data['stair_down']
+                        explored         = floor_data['explored']
+                        log.appendleft(f"You ascend to floor {current_floor}.")
 
-            e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
-            for em in e_msgs:
-                log.appendleft(em)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                for em in e_msgs:
+                    log.appendleft(em)
 
         visible   = compute_fov(tiles, px, py, player.fov_radius)
         explored |= visible

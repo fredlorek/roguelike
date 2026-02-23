@@ -51,80 +51,63 @@ Syntax check: `python3 -m py_compile roguelike.py && python3 -m py_compile lore_
 - Stair positions are room centers: `stair_down = rooms[-1].center()`, `start/stair_up = rooms[0].center()`
 - Floor 1 has `stair_up = None`; floors > 1 have `stair_up = start`
 
+## Completed
+
+- **Enemy variety** — Gunner, Lurker, Brute, Exploder with distinct AI and per-type colour coding.
+- **Richer level-up rewards** — modal lets player pick a stat to raise; Body recalculates max HP.
+- **Status effects** — poison, burn, stun on `Player`/`Enemy`; `tick_effects` runs each turn;
+  Stalker/Gunner/Sentry/Brute apply on-hit; Toxin Grenade, Stun Charge, Nano-Antidote added;
+  FX row in panel; stun blocks player action for one turn.
+
 ## To-Do: Path to Playable
 
-Items ordered by impact on the core game loop. The first few fix the biggest gaps in
-moment-to-moment feel; later items add depth and replayability.
+Items ordered by build dependency and impact on moment-to-moment feel.
 
-1. ~~**Enemy variety and unique behaviours**~~ ✓ — Gunner (ranged/retreat), Lurker (2 steps/turn),
-   Brute (acts every other turn), Exploder (splash on death). Per-type colour coding. Floor weights
-   tuned across all 4 theme zones.
+1. **Run summary screen** — after winning or dying, show a recap: floors reached, enemies killed,
+   items found, XP earned, cause of death. Closes the feedback loop so each run has a concrete
+   shape. All data is on `Player` already — just needs tallying and a display function alongside
+   `show_game_over`.
 
-2. **Richer level-up rewards** — levelling up currently only grants +5 max HP. Add an ATK or DEF
-   bonus per level, or show a small modal letting the player put a point into one of their five
-   stats. Without this, the XP/level system feels inert.
+2. **Consumable variety** — add tactically distinct throwables that use the new status-effect
+   system: a Smoke Grenade (blocks LOS for 3 turns), an EMP Charge (inflicts stun on all Drones
+   and Sentries in FOV), a Scanner Chip (reveals full floor map). These give players real choices
+   beyond "heal or don't heal" and put the grenade-targeting code from step #3 to full use.
 
-3. **Status effects** — add poison, burn, and stun as conditions that enemies (and traps) can
-   inflict, and that the player can inflict via consumables. Store active effects on `Player` and
-   `Enemy` and tick them at the start of each turn. This makes every combat decision matter more.
+3. **Minimap overlay** — the `explored` set is already tracked per floor. Add an `M` key that
+   draws a full-screen greyscale overview of the explored map. Pure rendering work, no logic
+   changes.
 
-4. **Consumable variety** — the inventory has med-patches, medkits, and nano-injects, all of which
-   just heal. Add a handful of tactically distinct items: a Smoke Grenade (blocks LOS for 3 turns),
-   an EMP Charge (disables all Drones and Sentries in FOV for 2 turns), a Scanner Chip (reveals
-   full floor map). These give players choices beyond "heal or don't heal."
+4. **Traps and hazardous tiles** — place tripwire mines, acid puddles, and electric floor panels
+   in `make_floor`. Acid/electric apply burn/stun (reusing the status-effect system). Raises the
+   cost of careless movement and rewards careful play.
 
-5. **Tech gear and tool sets** — add a new `'tool'` equipment slot and a `T` key to activate it.
-   Tools give the Tech stat real moment-to-moment expression: a Bypass Kit disarms traps, a
-   Splice Tool hacks terminals for bonuses, a Signal Jammer disables Drones and Sentries in FOV
-   for 2 turns, a Grapple Line lets the player move through one wall tile. This is a contained
-   addition — new slot on `Item`, one new panel row, one new key — that opens up the Tech stat
-   and bridges into traps (#6) and the hacking mechanic (#9).
+5. **Tech gear and tool sets** — add a `'tool'` equipment slot and a `T` key to activate it: a
+   Bypass Kit disarms traps (#4), a Signal Jammer stuns Drones/Sentries in FOV, a Grapple Line
+   lets the player move through one wall tile. Gives the Tech stat moment-to-moment expression
+   and bridges into the hacking mechanic (#6).
 
-6. **Traps and hazardous tiles** — introduce a small set of floor hazards placed by `make_floor`:
-   tripwire mines, acid puddles, and electric floor panels. They raise the cost of careless
-   movement and reward careful play. A Bypass Kit (see #5) can disarm them, creating a direct
-   payoff for investing in Tech gear.
+6. **Hacking mechanic for terminals** — let the player "jack in" to a terminal (costs a turn) for
+   a Mind-scaled bonus: low Mind reads the log, high Mind can disable nearby enemies, unlock a
+   vault, or reveal the floor map. Terminals become interactive rewards rather than passive
+   flavour.
 
-7. **Signal corruption mechanic** — floors 7–10 are narratively the most dire, but mechanically
-   identical to floor 1. Add a per-turn "signal interference" counter that grows on deep floors
+7. **Signal corruption mechanic** — add a per-turn interference counter that grows on floors 7–10
    and causes escalating effects: random stat penalties, brief FOV flickering, phantom enemy
-   sounds in the message log. This makes the theme tangible without adding new systems.
+   sounds in the log. Makes the late-game theme tangible without adding new systems.
 
-8. **Minimap overlay** — the `explored` set is already tracked per floor. Add an `M` key that
-   draws a full-screen greyscale overview of the explored map so the player can orient themselves.
-   This is pure rendering work with no logic changes.
+8. **Difficulty and challenge modes** — difficulty selector at character creation (Normal / Hard /
+   Ironman). Hard scales enemy ATK/HP by 25% and halves shop credits. Ironman disables `R`.
+   Small multipliers that extend replayability without new content.
 
-9. **Hacking mechanic for terminals** — the Mind stat currently has limited expression. Let the
-   player "jack in" to a terminal (costs a turn) for a bonus that scales with Mind: low Mind just
-   reads the log, high Mind can disable nearby enemies, unlock a vault for free, or reveal the
-   floor map. Terminals become interactive rewards rather than passive flavour.
+9. **Procedurally generated overland map** — world map with named sites (derelict ships, colony
+   ruins, signal outposts), each its own dungeon with a distinct theme and enemy set. Player
+   chooses which site to enter. Requires a `Site` data structure and overland rendering layer.
+   Best tackled once per-floor content (items, enemies, effects) is fully solid.
 
-10. **Run summary screen** — after winning or dying, show a recap: floors reached, enemies killed,
-    items found, XP earned, cause of death. This closes the feedback loop and makes each run feel
-    like it has a concrete shape. The data is all available on `Player` already — just needs
-    tallying and a display function alongside `show_game_over`.
-
-11. **Difficulty and challenge modes** — add a difficulty selector to character creation (Normal /
-    Hard / Ironman). Hard increases enemy ATK/HP by 25% and halves shop credits. Ironman prevents
-    the `R` key from resetting the dungeon — death is permanent. These are small constant
-    multipliers that dramatically extend replayability without new content.
-
-12. **Procedurally generated overland map** — replace the single linear dungeon with a world map
-    containing multiple named sites (derelict ships, colony ruins, signal outposts), each
-    generated as its own dungeon with a distinct theme and enemy set. The player chooses which
-    site to enter, enabling risk/reward routing decisions: clear an easy site first to gear up,
-    or dive straight into the hardest one. The authored Erebus Station narrative becomes one
-    thread among several. Requires designing a `Site` data structure and an overland rendering
-    layer before any dungeon work. Best tackled after the per-floor content (items, enemies,
-    status effects) is solid, so each site feels meaningfully different.
-
-13. **Spaceship as home base** — give the player a ship that serves as the hub between overland
-    maps. The ship has persistent state across runs: upgrade bays, a cargo hold, and eventually
-    crew NPCs with their own dialogue and stat contributions. Travelling to a new world map costs
-    fuel, which is found in dungeons alongside credits. This turns the game from a series of
-    disconnected runs into an ongoing campaign — the ship is the throughline. Architecturally,
-    the ship is a special non-dungeon screen rendered outside the `main` game loop, with its
-    own state dict persisted separately from `floors`.
+10. **Spaceship as home base** — persistent hub between overland maps: upgrade bays, cargo hold,
+    eventually crew NPCs. Travel costs fuel found in dungeons. Turns disconnected runs into an
+    ongoing campaign. Architecturally a non-dungeon screen with its own state dict outside
+    `floors`.
 
 ---
 
@@ -157,5 +140,8 @@ Game logic and rendering are deliberately kept separate:
 | `>` tile (walk onto) | Descend one floor |
 | `<` tile (walk onto) | Ascend one floor |
 | `I` | Open equipment screen |
+| `U` | Use first consumable (grenades auto-target nearest visible enemy) |
+| `F` | Fire ranged weapon (opens targeting cursor) |
+| `T` | Open shop (when standing in a Supply Depot) |
 | `R` | New dungeon (resets floors, keeps player equipment) |
 | `Q` | Quit |
