@@ -444,7 +444,7 @@ SKILLS = {
     'firearms':     {'name': 'Firearms',     'cat': 'Combat',     'desc': 'Ranged weapon proficiency.',       'effect': '+1 rATK/lv'},
     'tactics':      {'name': 'Tactics',      'cat': 'Combat',     'desc': 'Tactical positioning and timing.', 'effect': '+2% dodge/lv'},
     'engineering':  {'name': 'Engineering',  'cat': 'Technical',  'desc': 'Repair, craft, disarm traps.',     'effect': 'See traps(1) Disarm(2)'},
-    'hacking':      {'name': 'Hacking',      'cat': 'Technical',  'desc': 'Terminal intrusion depth.',        'effect': 'Terminals (future)'},
+    'hacking':      {'name': 'Hacking',      'cat': 'Technical',  'desc': 'Terminal intrusion depth.',        'effect': 'Terminals (see levels)'},
     'electronics':  {'name': 'Electronics',  'cat': 'Technical',  'desc': 'Sensor arrays and drone control.', 'effect': 'Radar (future)'},
     'pilot':        {'name': 'Pilot',        'cat': 'Navigation', 'desc': 'Ship handling and navigation.',    'effect': '-1 fuel/2 lv'},
     'cartography':  {'name': 'Cartography',  'cat': 'Navigation', 'desc': 'Spatial awareness and mapping.',   'effect': '+1 FOV/2 lv'},
@@ -1197,7 +1197,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                max_floor=max_floor, floor_name=theme['name'])
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  E:disarm  U:use  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  H:hack  E:disarm  U:use  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -2619,6 +2619,357 @@ def show_game_over(stdscr, player, site_name):
             return False
 
 
+def show_hacking_interface(stdscr, player, terminal, current_floor, explored,
+                           enemies_on_map, items_on_map, special_rooms,
+                           tiles, px, py, visible, log, terminals_on_map,
+                           current_theme):
+    """Hacking terminal interface. Returns True if a turn was consumed."""
+    hack_lv = player.skills.get('hacking', 0)
+    BOX_W   = 62
+    inner_w = BOX_W - 4
+
+    ACTIONS = [
+        (0, "Read log",         "always available"),
+        (1, "Map fragment",     "Hacking 1"),
+        (2, "Disable units",    "Hacking 2"),
+        (3, "Unlock vault",     "Hacking 3"),
+        (4, "Alert protocol",   "Hacking 4"),
+        (5, "Remote access",    "Hacking 5"),
+    ]
+
+    # Success rate for levels 1-5
+    def _success_rate():
+        return max(15, min(90, 60 + (player.tech - 5) * 8 - current_floor * 3))
+
+    def _draw_box(sel):
+        term_h, term_w = stdscr.getmaxyx()
+        box_h = 2 + 3 + len(ACTIONS) + 2   # borders + header rows + actions + footer row + dividers
+        box_y = max(0, (term_h - box_h) // 2)
+        box_x = max(0, (term_w - BOX_W) // 2)
+
+        term_attr  = curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD
+        panel_attr = curses.color_pair(COLOR_PANEL)
+        dark_attr  = curses.color_pair(COLOR_DARK) | curses.A_DIM
+        sel_attr   = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+
+        def hline(row):
+            try:
+                stdscr.addch(row, box_x, curses.ACS_LTEE, term_attr)
+                for bx in range(1, BOX_W - 1):
+                    stdscr.addch(row, box_x + bx, curses.ACS_HLINE, term_attr)
+                stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_RTEE, term_attr)
+            except curses.error:
+                pass
+
+        def border_row(row):
+            try:
+                stdscr.addch(row, box_x, curses.ACS_VLINE, term_attr)
+                stdscr.addch(row, box_x + BOX_W - 1, curses.ACS_VLINE, term_attr)
+                stdscr.addstr(row, box_x + 1, ' ' * (BOX_W - 2))
+            except curses.error:
+                pass
+
+        # Top border
+        try:
+            title_str = " TERMINAL ACCESS "
+            pad = BOX_W - 2 - len(title_str)
+            left = pad // 2
+            right = pad - left
+            stdscr.addch(box_y, box_x, curses.ACS_ULCORNER, term_attr)
+            for bx in range(1, left + 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, term_attr)
+            stdscr.addstr(box_y, box_x + left + 1, title_str, term_attr)
+            for bx in range(left + 1 + len(title_str), BOX_W - 1):
+                stdscr.addch(box_y, box_x + bx, curses.ACS_HLINE, term_attr)
+            stdscr.addch(box_y, box_x + BOX_W - 1, curses.ACS_URCORNER, term_attr)
+        except curses.error:
+            pass
+
+        # Terminal title row
+        row = box_y + 1
+        border_row(row)
+        tname = terminal.title[:inner_w + 2]
+        try:
+            stdscr.addstr(row, box_x + 2, tname, term_attr)
+        except curses.error:
+            pass
+
+        # Info row
+        row = box_y + 2
+        border_row(row)
+        info = f"  Tech: {player.tech}   Hacking: {hack_lv}   Floor: {current_floor}"
+        try:
+            stdscr.addstr(row, box_x + 2, info[:inner_w + 2], panel_attr)
+        except curses.error:
+            pass
+
+        hline(box_y + 3)
+
+        # Action rows
+        sr = _success_rate()
+        for i, (req_lv, name, hint) in enumerate(ACTIONS):
+            row = box_y + 4 + i
+            border_row(row)
+            locked   = (req_lv > hack_lv)
+            selected = (i == sel) and not locked
+            if locked:
+                prefix = "---"
+                rate_s = "[locked]"
+                attr   = dark_attr
+            elif req_lv == 0:
+                prefix = "  >"  if selected else "   "
+                rate_s = hint
+                attr   = sel_attr if selected else panel_attr
+            else:
+                prefix = "  >" if selected else "   "
+                rate_s = f"[{sr}% success]"
+                attr   = sel_attr if selected else panel_attr
+
+            line = f"{prefix} [{req_lv}] {name:<18} {hint:<14} {rate_s}"
+            try:
+                stdscr.addstr(row, box_x + 2, line[:inner_w + 2], attr)
+            except curses.error:
+                pass
+
+        hline(box_y + 4 + len(ACTIONS))
+
+        # Footer row
+        row = box_y + 4 + len(ACTIONS) + 1
+        border_row(row)
+        footer = "W/S: select   Enter: execute   Esc: cancel"
+        try:
+            stdscr.addstr(row, box_x + 2, footer[:inner_w + 2], panel_attr)
+        except curses.error:
+            pass
+
+        # Bottom border
+        bot = box_y + 4 + len(ACTIONS) + 2
+        try:
+            stdscr.addch(bot, box_x, curses.ACS_LLCORNER, term_attr)
+            for bx in range(1, BOX_W - 1):
+                stdscr.addch(bot, box_x + bx, curses.ACS_HLINE, term_attr)
+            stdscr.addch(bot, box_x + BOX_W - 1, curses.ACS_LRCORNER, term_attr)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+
+    def _fail_spawn():
+        scale = 1 + (current_floor - 1) * 0.2
+        floors_avail = [(x, y) for y in range(MAP_H) for x in range(MAP_W)
+                        if tiles[y][x] == FLOOR
+                        and (x, y) not in enemies_on_map and (x, y) != (px, py)]
+        if floors_avail:
+            for pos in random.sample(floors_avail, min(2, len(floors_avail))):
+                t = random.choices(ENEMY_TEMPLATES, weights=current_theme['weights'])[0]
+                enemies_on_map[pos] = Enemy(
+                    name=t['name'], char=t['char'],
+                    hp=max(1, int(t['hp'] * scale)), atk=max(1, int(t['atk'] * scale)),
+                    dfn=int(t['dfn'] * scale), xp_reward=int(t['xp'] * scale),
+                    behaviour=t.get('behaviour', 'melee'))
+        log.appendleft("HACK FAILED — security alert triggered!")
+
+    # Find the initially selected row (first unlocked)
+    sel = 0
+
+    while True:
+        _draw_box(sel)
+        key = stdscr.getch()
+
+        if key == 27:           # Esc
+            return False
+        if key in (ord('w'), curses.KEY_UP):
+            for step in range(1, len(ACTIONS)):
+                nsel = (sel - step) % len(ACTIONS)
+                if ACTIONS[nsel][0] <= hack_lv:
+                    sel = nsel
+                    break
+        elif key in (ord('s'), curses.KEY_DOWN):
+            for step in range(1, len(ACTIONS)):
+                nsel = (sel + step) % len(ACTIONS)
+                if ACTIONS[nsel][0] <= hack_lv:
+                    sel = nsel
+                    break
+        elif key in (curses.KEY_ENTER, ord('\n'), ord('\r')):
+            req_lv = ACTIONS[sel][0]
+            if req_lv > hack_lv:
+                continue   # locked row, ignore
+
+            # ── Level 0: Read log ─────────────────────────────────────────────
+            if req_lv == 0:
+                show_terminal(stdscr, terminal)
+                tech_xp = max(0, (player.tech - 5) * 5)
+                if tech_xp:
+                    n_lv, lvl_msg = player.gain_xp(tech_xp)
+                    log.appendleft(f"Tech interface: +{tech_xp} XP")
+                    if lvl_msg:
+                        log.appendleft(lvl_msg)
+                return False   # no turn consumed
+
+            # ── Levels 1-5: roll success ──────────────────────────────────────
+            sr = _success_rate()
+            success = random.randint(1, 100) <= sr
+
+            if not success:
+                _fail_spawn()
+                return True   # turn consumed
+
+            # ── Level 1: Map fragment ──────────────────────────────────────────
+            if req_lv == 1:
+                for dy in range(-15, 16):
+                    for dx in range(-15, 16):
+                        tx2, ty2 = px + dx, py + dy
+                        if 0 <= tx2 < MAP_W and 0 <= ty2 < MAP_H and tiles[ty2][tx2] == FLOOR:
+                            explored.add((tx2, ty2))
+                log.appendleft("Map fragment downloaded.")
+                return True
+
+            # ── Level 2: Disable units ────────────────────────────────────────
+            if req_lv == 2:
+                count = 0
+                for pos, e in enemies_on_map.items():
+                    if pos in visible and e.name in ('Sentry', 'Drone'):
+                        apply_effect(e, 'stun', 3)
+                        count += 1
+                log.appendleft(f"Disabled {count} unit(s) in sensor range.")
+                return True
+
+            # ── Level 3: Unlock vault ─────────────────────────────────────────
+            if req_lv == 3:
+                vault = next((sr2 for sr2 in special_rooms.values()
+                              if sr2['type'] == 'vault' and not sr2['triggered']), None)
+                if vault:
+                    vault['triggered'] = True
+                    rare = [it for it in ITEM_TEMPLATES if it.atk >= 3 or it.dfn >= 3]
+                    if rare:
+                        avail = list(vault['tiles'])
+                        for pos in random.sample(avail, min(4, len(avail))):
+                            items_on_map[pos] = copy.copy(random.choice(rare))
+                    log.appendleft("Vault override successful. Rare gear inside.")
+                else:
+                    log.appendleft("No vault found on this floor.")
+                return True
+
+            # ── Level 4: Alert protocol ───────────────────────────────────────
+            if req_lv == 4:
+                scale = 1 + (current_floor - 1) * 0.2
+                candidates = sorted(
+                    [(x, y) for y in range(MAP_H) for x in range(MAP_W)
+                     if tiles[y][x] == FLOOR
+                     and (x, y) not in enemies_on_map and (x, y) != (px, py)],
+                    key=lambda pos: abs(pos[0] - px) + abs(pos[1] - py)
+                )
+                for pos in candidates[:3]:
+                    t = random.choices(ENEMY_TEMPLATES, weights=current_theme['weights'])[0]
+                    enemies_on_map[pos] = Enemy(
+                        name=t['name'], char=t['char'],
+                        hp=max(1, int(t['hp'] * scale)), atk=max(1, int(t['atk'] * scale)),
+                        dfn=int(t['dfn'] * scale), xp_reward=int(t['xp'] * scale),
+                        behaviour=t.get('behaviour', 'melee'))
+                rare = [it for it in ITEM_TEMPLATES if it.atk >= 3 or it.dfn >= 3]
+                if rare:
+                    items_on_map[(px, py)] = copy.copy(random.choice(rare))
+                log.appendleft("ALERT PROTOCOL — reinforcements converging. Rare cache unlocked.")
+                return True
+
+            # ── Level 5: Remote access ────────────────────────────────────────
+            if req_lv == 5:
+                others = [(pos, t2) for pos, t2 in terminals_on_map.items()
+                          if not t2.read and pos != (px, py)]
+                if not others:
+                    log.appendleft("No unread terminals on this floor.")
+                    return False
+                # Show remote picker sub-menu
+                rpick = 0
+                while True:
+                    term_h, term_w = stdscr.getmaxyx()
+                    pbox_h = 2 + 2 + len(others) + 1
+                    pbox_y = max(0, (term_h - pbox_h) // 2)
+                    pbox_x = max(0, (term_w - BOX_W) // 2)
+                    term_attr  = curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD
+                    panel_attr = curses.color_pair(COLOR_PANEL)
+                    sel_attr   = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+
+                    def _prow(row):
+                        try:
+                            stdscr.addch(row, pbox_x, curses.ACS_VLINE, term_attr)
+                            stdscr.addch(row, pbox_x + BOX_W - 1, curses.ACS_VLINE, term_attr)
+                            stdscr.addstr(row, pbox_x + 1, ' ' * (BOX_W - 2))
+                        except curses.error:
+                            pass
+
+                    try:
+                        rtitle = " REMOTE ACCESS — Select Terminal "
+                        rpad   = BOX_W - 2 - len(rtitle)
+                        rleft  = rpad // 2
+                        stdscr.addch(pbox_y, pbox_x, curses.ACS_ULCORNER, term_attr)
+                        for bx in range(1, rleft + 1):
+                            stdscr.addch(pbox_y, pbox_x + bx, curses.ACS_HLINE, term_attr)
+                        stdscr.addstr(pbox_y, pbox_x + rleft + 1, rtitle, term_attr)
+                        for bx in range(rleft + 1 + len(rtitle), BOX_W - 1):
+                            stdscr.addch(pbox_y, pbox_x + bx, curses.ACS_HLINE, term_attr)
+                        stdscr.addch(pbox_y, pbox_x + BOX_W - 1, curses.ACS_URCORNER, term_attr)
+                    except curses.error:
+                        pass
+
+                    _prow(pbox_y + 1)
+                    try:
+                        stdscr.addstr(pbox_y + 1, pbox_x + 2,
+                                      "W/S: select   Enter: read   Esc: cancel"[:inner_w + 2],
+                                      panel_attr)
+                    except curses.error:
+                        pass
+
+                    try:
+                        stdscr.addch(pbox_y + 2, pbox_x, curses.ACS_LTEE, term_attr)
+                        for bx in range(1, BOX_W - 1):
+                            stdscr.addch(pbox_y + 2, pbox_x + bx, curses.ACS_HLINE, term_attr)
+                        stdscr.addch(pbox_y + 2, pbox_x + BOX_W - 1, curses.ACS_RTEE, term_attr)
+                    except curses.error:
+                        pass
+
+                    for oi, (opos, ot) in enumerate(others):
+                        orow = pbox_y + 3 + oi
+                        _prow(orow)
+                        prefix = "  >" if oi == rpick else "   "
+                        label  = f"{prefix} {ot.title[:inner_w - 1]}"
+                        attr   = sel_attr if oi == rpick else panel_attr
+                        try:
+                            stdscr.addstr(orow, pbox_x + 2, label[:inner_w + 2], attr)
+                        except curses.error:
+                            pass
+
+                    pbot = pbox_y + 3 + len(others)
+                    try:
+                        stdscr.addch(pbot, pbox_x, curses.ACS_LLCORNER, term_attr)
+                        for bx in range(1, BOX_W - 1):
+                            stdscr.addch(pbot, pbox_x + bx, curses.ACS_HLINE, term_attr)
+                        stdscr.addch(pbot, pbox_x + BOX_W - 1, curses.ACS_LRCORNER, term_attr)
+                    except curses.error:
+                        pass
+
+                    stdscr.refresh()
+                    pk = stdscr.getch()
+
+                    if pk == 27:
+                        return False
+                    if pk in (ord('w'), curses.KEY_UP):
+                        rpick = (rpick - 1) % len(others)
+                    elif pk in (ord('s'), curses.KEY_DOWN):
+                        rpick = (rpick + 1) % len(others)
+                    elif pk in (curses.KEY_ENTER, ord('\n'), ord('\r')):
+                        chosen_t = others[rpick][1]
+                        tech_xp  = max(0, (player.tech - 5) * 5)
+                        show_terminal(stdscr, chosen_t)
+                        if tech_xp:
+                            n_lv, lvl_msg = player.gain_xp(tech_xp)
+                            log.appendleft(f"Tech interface: +{tech_xp} XP")
+                            if lvl_msg:
+                                log.appendleft(lvl_msg)
+                        log.appendleft("Remote access successful.")
+                        return True
+
+
 def run_site(stdscr, site, player):
     """Run the dungeon game loop for a site.
     Returns 'escaped' (left via B), 'dead', or 'restart' (R pressed)."""
@@ -2702,6 +3053,132 @@ def run_site(stdscr, site, player):
 
         if key in (ord('k'), ord('K')):
             show_skills_screen(stdscr, player)
+
+        if key in (ord('h'), ord('H')):
+            if 'stun' in player.active_effects:
+                log.appendleft("You are stunned and cannot act!")
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                for em in e_msgs:
+                    log.appendleft(em)
+            else:
+                hack_lv = player.skills.get('hacking', 0)
+                on_terminal = terminals_on_map.get((px, py))
+                if on_terminal:
+                    consumed = show_hacking_interface(
+                        stdscr, player, on_terminal, current_floor, explored,
+                        enemies_on_map, items_on_map, special_rooms,
+                        tiles, px, py, visible, log, terminals_on_map, current_theme)
+                    if consumed:
+                        for msg in tick_effects(player, "You"):
+                            log.appendleft(msg)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                        for em in e_msgs:
+                            log.appendleft(em)
+                elif hack_lv >= 5:
+                    # Remote access from anywhere on floor
+                    others = [(pos, t) for pos, t in terminals_on_map.items() if not t.read]
+                    if others:
+                        # Build a temporary dummy terminal to pass to show_hacking_interface
+                        # Actually, pick via remote picker directly here then open interface
+                        rpick2 = 0
+                        BOX_W2  = 62
+                        inner_w2 = BOX_W2 - 4
+                        while True:
+                            term_h2, term_w2 = stdscr.getmaxyx()
+                            pbox_h2 = 2 + 2 + len(others) + 1
+                            pbox_y2 = max(0, (term_h2 - pbox_h2) // 2)
+                            pbox_x2 = max(0, (term_w2 - BOX_W2) // 2)
+                            t_attr2  = curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD
+                            p_attr2  = curses.color_pair(COLOR_PANEL)
+                            s_attr2  = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+
+                            def _r2row(row):
+                                try:
+                                    stdscr.addch(row, pbox_x2, curses.ACS_VLINE, t_attr2)
+                                    stdscr.addch(row, pbox_x2 + BOX_W2 - 1, curses.ACS_VLINE, t_attr2)
+                                    stdscr.addstr(row, pbox_x2 + 1, ' ' * (BOX_W2 - 2))
+                                except curses.error:
+                                    pass
+
+                            try:
+                                rtitle2 = " REMOTE ACCESS — Select Terminal "
+                                rpad2   = BOX_W2 - 2 - len(rtitle2)
+                                rleft2  = rpad2 // 2
+                                stdscr.addch(pbox_y2, pbox_x2, curses.ACS_ULCORNER, t_attr2)
+                                for bx in range(1, rleft2 + 1):
+                                    stdscr.addch(pbox_y2, pbox_x2 + bx, curses.ACS_HLINE, t_attr2)
+                                stdscr.addstr(pbox_y2, pbox_x2 + rleft2 + 1, rtitle2, t_attr2)
+                                for bx in range(rleft2 + 1 + len(rtitle2), BOX_W2 - 1):
+                                    stdscr.addch(pbox_y2, pbox_x2 + bx, curses.ACS_HLINE, t_attr2)
+                                stdscr.addch(pbox_y2, pbox_x2 + BOX_W2 - 1, curses.ACS_URCORNER, t_attr2)
+                            except curses.error:
+                                pass
+
+                            _r2row(pbox_y2 + 1)
+                            try:
+                                stdscr.addstr(pbox_y2 + 1, pbox_x2 + 2,
+                                              "W/S: select   Enter: hack   Esc: cancel"[:inner_w2 + 2],
+                                              p_attr2)
+                            except curses.error:
+                                pass
+
+                            try:
+                                stdscr.addch(pbox_y2 + 2, pbox_x2, curses.ACS_LTEE, t_attr2)
+                                for bx in range(1, BOX_W2 - 1):
+                                    stdscr.addch(pbox_y2 + 2, pbox_x2 + bx, curses.ACS_HLINE, t_attr2)
+                                stdscr.addch(pbox_y2 + 2, pbox_x2 + BOX_W2 - 1, curses.ACS_RTEE, t_attr2)
+                            except curses.error:
+                                pass
+
+                            for oi2, (opos2, ot2) in enumerate(others):
+                                orow2 = pbox_y2 + 3 + oi2
+                                _r2row(orow2)
+                                pfx2 = "  >" if oi2 == rpick2 else "   "
+                                lbl2 = f"{pfx2} {ot2.title[:inner_w2 - 1]}"
+                                a2   = s_attr2 if oi2 == rpick2 else p_attr2
+                                try:
+                                    stdscr.addstr(orow2, pbox_x2 + 2, lbl2[:inner_w2 + 2], a2)
+                                except curses.error:
+                                    pass
+
+                            pbot2 = pbox_y2 + 3 + len(others)
+                            try:
+                                stdscr.addch(pbot2, pbox_x2, curses.ACS_LLCORNER, t_attr2)
+                                for bx in range(1, BOX_W2 - 1):
+                                    stdscr.addch(pbot2, pbox_x2 + bx, curses.ACS_HLINE, t_attr2)
+                                stdscr.addch(pbot2, pbox_x2 + BOX_W2 - 1, curses.ACS_LRCORNER, t_attr2)
+                            except curses.error:
+                                pass
+
+                            stdscr.refresh()
+                            pk2 = stdscr.getch()
+
+                            if pk2 == 27:
+                                break
+                            if pk2 in (ord('w'), curses.KEY_UP):
+                                rpick2 = (rpick2 - 1) % len(others)
+                            elif pk2 in (ord('s'), curses.KEY_DOWN):
+                                rpick2 = (rpick2 + 1) % len(others)
+                            elif pk2 in (curses.KEY_ENTER, ord('\n'), ord('\r')):
+                                chosen_pos2, chosen_t2 = others[rpick2]
+                                consumed2 = show_hacking_interface(
+                                    stdscr, player, chosen_t2, current_floor, explored,
+                                    enemies_on_map, items_on_map, special_rooms,
+                                    tiles, chosen_pos2[0], chosen_pos2[1], visible, log,
+                                    terminals_on_map, current_theme)
+                                if consumed2:
+                                    for msg in tick_effects(player, "You"):
+                                        log.appendleft(msg)
+                                    e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                                    for em in e_msgs:
+                                        log.appendleft(em)
+                                break
+                    else:
+                        log.appendleft("No unread terminals on this floor.")
+                else:
+                    log.appendleft("No terminal in range.")
 
         if key in (ord('e'), ord('E')):
             if 'stun' in player.active_effects:
@@ -2925,19 +3402,9 @@ def run_site(stdscr, site, player):
                     if (px, py) in terminals_on_map:
                         t = terminals_on_map[(px, py)]
                         if not t.read:
-                            log.appendleft(f"Terminal: {t.title[:44]}")
-                            show_terminal(stdscr, t)
-                            tech_xp = max(0, (player.tech - 5) * 5)
-                            if tech_xp:
-                                n_lv, lvl_msg = player.gain_xp(tech_xp)
-                                log.appendleft(f"Tech interface: +{tech_xp} XP")
-                                if lvl_msg:
-                                    log.appendleft(lvl_msg)
-                                for _ in range(n_lv):
-                                    show_levelup_modal(stdscr, player)
-                                    show_skill_levelup_modal(stdscr, player, points=2)
+                            log.appendleft(f"Terminal — [H] to access: {t.title[:38]}")
                         else:
-                            log.appendleft(f"[already read] {t.title[:38]}")
+                            log.appendleft(f"[offline] {t.title[:44]}")
 
                     for sroom in special_rooms.values():
                         if (px, py) in sroom['tiles']:

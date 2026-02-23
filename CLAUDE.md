@@ -54,6 +54,7 @@ condition — sites can be cleared but the universe keeps expanding.
 | `show_character_creation(stdscr)` | 6-step wizard; returns configured `Player` |
 | `show_skill_levelup_modal(stdscr, player, points=2)` | Spend skill points after level-up; unspent banked |
 | `show_skills_screen(stdscr, player)` | K key in-game: read-only overview + spend banked SP |
+| `show_hacking_interface(stdscr, player, terminal, ...)` | H key terminal hacking modal; returns True if turn consumed |
 | `main(stdscr)` | Outer coordinator: character creation → ship ↔ site loop |
 
 ### Sites
@@ -76,7 +77,7 @@ condition — sites can be cleared but the universe keeps expanding.
 | Combat | Firearms | +1 ranged ATK/lv |
 | Combat | Tactics | +2% dodge/lv |
 | Technical | Engineering | See traps (lv1), disarm adjacent trap with `E` (lv2) |
-| Technical | Hacking | Terminal depth (future item 3) |
+| Technical | Hacking | `H` key interface: lv0 read, lv1 map fragment, lv2 disable units, lv3 unlock vault, lv4 alert protocol, lv5 remote access |
 | Technical | Electronics | Radar/drones (future item 3/4) |
 | Navigation | Pilot | -1 fuel cost per 2 levels |
 | Navigation | Cartography | +1 FOV radius per 2 levels |
@@ -154,20 +155,15 @@ Engineering 2+. Survival reduces effect duration; dodge_chance gives sidestep me
 
 ---
 
-### 3. Hacking mechanic for terminals
+### ~~3. Hacking mechanic for terminals~~ ✓ DONE
 
-When the player walks onto a terminal tile, pressing `H` (or Enter) opens a hacking
-interface instead of just reading the log. The action available scales with the player's
-Hacking skill level:
-- Level 0: read the log (current behaviour)
-- Level 1: download a map fragment (partially reveals `explored`)
-- Level 2: disable all Sentries/Drones in FOV for 3 turns
-- Level 3: unlock a locked vault without paying credits
-- Level 4: trigger a floor-wide alert (enemy density increases, rare loot reward)
-- Level 5: remote-access any terminal on the floor from distance
-
-Hacking costs one turn and can fail (based on Tech stat vs. floor level), with a failed
-attempt alerting nearby enemies.
+`H` key on terminal tile opens `show_hacking_interface()`. Actions scale with Hacking level:
+lv0 read log (no turn cost), lv1 map fragment (radius 15), lv2 disable Sentries/Drones in
+FOV for 3t, lv3 unlock vault without credits, lv4 alert protocol (3 reinforcements + rare
+drop), lv5 remote access any unread terminal. Success formula:
+`max(15, min(90, 60 + (tech-5)*8 - floor*3))`. Failure spawns 2 reinforcements. Locked rows
+shown in grey. Stunned players still waste their turn. Hacking 5 off-terminal: remote picker
+shows all unread terminals floor-wide.
 
 ---
 
@@ -275,6 +271,7 @@ Game logic and rendering are deliberately kept separate:
 | `B` | Back to ship (floor 1 only) |
 | `I` | Equipment screen |
 | `K` | Skills screen (read-only; spend banked SP if any) |
+| `H` | Hack terminal (on terminal tile) or remote-pick unread terminal (Hacking 5, off-tile) |
 | `E` | Disarm adjacent/current trap (Engineering 2+ required; costs a turn) |
 | `U` | Use first consumable (grenades auto-target nearest visible enemy) |
 | `F` | Fire ranged weapon (opens targeting cursor; Tab cycles targets) |
