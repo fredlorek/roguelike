@@ -400,11 +400,31 @@ class Player:
         return sum(i.dfn for i in self.equipment.values() if i)
 
     @property
+    def dodge_chance(self):
+        """Percent chance to dodge an attack (0–40%). Driven by reflex."""
+        return max(0, (self.reflex - 5) * 4)
+
+    @property
+    def ranged_atk(self):
+        """ATK for ranged weapons, with tech bonus on top of base ATK."""
+        return self.atk + max(0, (self.tech - 5) // 2)
+
+    @property
+    def xp_gain_multiplier(self):
+        """XP multiplier from mind stat (mind=5 → 1.0x, mind=10 → 1.25x)."""
+        return 1.0 + max(0, (self.mind - 5) * 0.05)
+
+    @property
+    def fov_radius(self):
+        """FOV radius extended by mind stat (mind=5 → 8, mind=8 → 9, mind=11 → 10)."""
+        return FOV_RADIUS + max(0, (self.mind - 5) // 3)
+
+    @property
     def xp_next(self):
         return self.XP_PER_LEVEL * self.level
 
     def gain_xp(self, amount):
-        self.xp += amount
+        self.xp += int(amount * self.xp_gain_multiplier)
         leveled = False
         while self.xp >= self.xp_next:
             self.xp    -= self.xp_next
@@ -744,6 +764,7 @@ def draw_panel(stdscr, player, col, rows, current_floor):
         (f"XP:  {player.xp:>3} / {player.xp_next:<3}",   panel_attr),
         (f"ATK: {player.atk}",                             panel_attr),
         (f"DEF: {player.dfn}",                             panel_attr),
+        (f"DODGE: {player.dodge_chance}%",                 panel_attr),
         (None, 0),                                          # blank
         ("[I] Equipment",                                   panel_attr),
     ]
@@ -1488,8 +1509,14 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
     # Updated as enemies move so later enemies see the current layout.
     occupied = set(enemies.keys())
 
+    intimidate_chance = max(0, (player.presence - 5) * 3)
+
     for epos, enemy in list(enemies.items()):
         ex, ey = epos
+        # Presence intimidate: visible enemies may hesitate and skip their turn
+        if intimidate_chance > 0 and epos in visible:
+            if random.randint(1, 100) <= intimidate_chance:
+                continue
         if epos in visible:
             # A* toward the player; other enemies are obstacles (but not the goal)
             blocked = occupied - {epos}
@@ -1497,9 +1524,13 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
             if path:
                 step = path[0]
                 if step == player_pos:
-                    dmg = max(1, enemy.atk - player.dfn)
-                    player.hp -= dmg
-                    msgs.append(f"{enemy.name} hits you for {dmg}!")
+                    # Reflex dodge roll
+                    if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
+                        msgs.append(f"{enemy.name} attacks — you dodge!")
+                    else:
+                        dmg = max(1, enemy.atk - player.dfn)
+                        player.hp -= dmg
+                        msgs.append(f"{enemy.name} hits you for {dmg}!")
                 elif step not in occupied:
                     occupied.discard(epos)
                     occupied.add(step)
@@ -1583,7 +1614,7 @@ def main(stdscr):
     stair_down    = floor_data['stair_down']
     explored      = floor_data['explored']
     log      = collections.deque(maxlen=LOG_LINES)
-    visible  = compute_fov(tiles, px, py)
+    visible  = compute_fov(tiles, px, py, player.fov_radius)
     explored |= visible
     draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies_on_map, log,
@@ -1672,7 +1703,7 @@ def main(stdscr):
 
                     if hit_pos:
                         enemy = enemies_on_map[hit_pos]
-                        dmg   = max(1, player.atk - enemy.dfn)
+                        dmg   = max(1, player.ranged_atk - enemy.dfn)
                         enemy.hp -= dmg
                         if enemy.hp <= 0:
                             del enemies_on_map[hit_pos]
@@ -1729,6 +1760,13 @@ def main(stdscr):
                     if not t.read:
                         log.appendleft(f"Terminal: {t.title[:44]}")
                         show_terminal(stdscr, t)
+                        # Tech bonus: +5 XP per tech point above 5
+                        tech_xp = max(0, (player.tech - 5) * 5)
+                        if tech_xp:
+                            lvl_msg = player.gain_xp(tech_xp)
+                            log.appendleft(f"Tech interface: +{tech_xp} XP")
+                            if lvl_msg:
+                                log.appendleft(lvl_msg)
                     else:
                         log.appendleft(f"[already read] {t.title[:38]}")
 
@@ -1766,7 +1804,7 @@ def main(stdscr):
             for em in e_msgs:
                 log.appendleft(em)
 
-        visible   = compute_fov(tiles, px, py)
+        visible   = compute_fov(tiles, px, py, player.fov_radius)
         explored |= visible
 
         # Win check
@@ -1792,7 +1830,7 @@ def main(stdscr):
                 stair_down     = floor_data['stair_down']
                 explored       = floor_data['explored']
                 log            = collections.deque(maxlen=LOG_LINES)
-                visible        = compute_fov(tiles, px, py)
+                visible        = compute_fov(tiles, px, py, player.fov_radius)
                 explored      |= visible
             else:
                 break
@@ -1818,7 +1856,7 @@ def main(stdscr):
                 stair_down       = floor_data['stair_down']
                 explored         = floor_data['explored']
                 log              = collections.deque(maxlen=LOG_LINES)
-                visible          = compute_fov(tiles, px, py)
+                visible          = compute_fov(tiles, px, py, player.fov_radius)
                 explored        |= visible
             else:
                 break
