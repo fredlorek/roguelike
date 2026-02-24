@@ -73,6 +73,16 @@ COLOR_ENEMY_FAST   = 17 # yellow      — Lurker
 COLOR_ENEMY_BRUTE  = 18 # white       — Brute
 COLOR_ENEMY_EXPL   = 19 # magenta     — Exploder
 COLOR_HAZARD       = 20 # red         — danger tiles
+COLOR_OV_OPEN      = 21 # green       — overland open ground
+COLOR_OV_FOREST    = 22 # dim green   — overland vegetation
+
+# Overland map tile chars
+OV_OPEN     = ','   # passable open ground
+OV_BLOCK    = '#'   # impassable obstacle
+OV_TREE     = 'T'   # passable vegetation
+OV_LANDING  = '*'   # landing pad (arrival point)
+OV_ENTRANCE = '>'   # dungeon entrance
+OV_IMPASSABLE = {OV_BLOCK}
 
 # Signal corruption (Erebus Station floors 7-10)
 CORRUPTION_MAX = 100

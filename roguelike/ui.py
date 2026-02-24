@@ -35,6 +35,8 @@ def setup_colors():
     curses.init_pair(COLOR_ENEMY_BRUTE,  curses.COLOR_WHITE,   -1)
     curses.init_pair(COLOR_ENEMY_EXPL,   curses.COLOR_MAGENTA, -1)
     curses.init_pair(COLOR_HAZARD,       curses.COLOR_RED,     -1)
+    curses.init_pair(COLOR_OV_OPEN,      curses.COLOR_GREEN,   -1)
+    curses.init_pair(COLOR_OV_FOREST,    curses.COLOR_GREEN,   -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, floor_name=None, corruption=0):
@@ -2101,6 +2103,87 @@ def show_ship_screen(stdscr, player, sites):
             return 'restart'
         if key in (ord('q'), ord('Q')):
             return 'quit'
+
+
+def draw_overland(stdscr, overland, player_pos, site_name, player, log, visible):
+    """Draw the overland surface map, panel, and log."""
+    stdscr.erase()
+    h, w = stdscr.getmaxyx()
+    map_cols = w - PANEL_W
+
+    tiles    = overland['tiles']
+    explored = overland['explored']
+    ox, oy   = player_pos
+
+    # Tile colour map
+    tile_attrs = {
+        OV_OPEN:     curses.color_pair(COLOR_OV_OPEN),
+        OV_BLOCK:    curses.color_pair(COLOR_WALL)   | curses.A_BOLD,
+        OV_TREE:     curses.color_pair(COLOR_OV_FOREST) | curses.A_DIM,
+        OV_LANDING:  curses.color_pair(COLOR_TERMINAL)  | curses.A_BOLD,
+        OV_ENTRANCE: curses.color_pair(COLOR_STAIR)     | curses.A_BOLD,
+    }
+
+    for ty in range(min(MAP_H, h - LOG_LINES)):
+        for tx in range(min(MAP_W, map_cols)):
+            pos = (tx, ty)
+            if pos not in explored:
+                continue
+            ch   = tiles[ty][tx]
+            attr = tile_attrs.get(ch, curses.color_pair(COLOR_FLOOR))
+            if pos not in visible:
+                attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
+            try:
+                stdscr.addch(ty, tx, ch, attr)
+            except curses.error:
+                pass
+
+    # Draw player
+    try:
+        stdscr.addch(oy, ox, PLAYER,
+                     curses.color_pair(COLOR_PLAYER) | curses.A_BOLD)
+    except curses.error:
+        pass
+
+    # Right panel
+    panel_col = w - PANEL_W
+    p_attr    = curses.color_pair(COLOR_PANEL)
+    hd_attr   = p_attr | curses.A_BOLD
+    hp_attr   = (curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD
+                 if player.hp <= player.max_hp // 4 else p_attr)
+    panel_lines = [
+        ("SURFACE",                              hd_attr),
+        (None, 0),
+        (site_name[:PANEL_W - 1],               p_attr),
+        (None, 0),
+        (f"HP:  {player.hp:>3} / {player.max_hp:<3}", hp_attr),
+        (f"Cr:  {player.credits}",              p_attr),
+        (f"Fuel:{player.fuel}",                 p_attr),
+        (None, 0),
+        ("WASD: move",                          p_attr),
+        (">: enter dungeon",                    p_attr),
+        ("B: back to ship",                     p_attr),
+    ]
+    for i, (text, attr) in enumerate(panel_lines):
+        if text is None:
+            continue
+        try:
+            stdscr.addstr(i, panel_col + 1, text[:PANEL_W - 2], attr)
+        except curses.error:
+            pass
+
+    # Log
+    log_start = h - LOG_LINES
+    log_list  = list(log)
+    for i in range(LOG_LINES):
+        msg = log_list[i] if i < len(log_list) else ''
+        try:
+            stdscr.addstr(log_start + i, 0, msg[:map_cols - 1],
+                          curses.color_pair(COLOR_PANEL))
+        except curses.error:
+            pass
+
+    stdscr.refresh()
 
 
 def show_nav_computer(stdscr, player, sites):

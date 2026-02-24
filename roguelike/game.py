@@ -8,7 +8,8 @@ import random
 from .constants import *
 from .entities import Enemy, Terminal
 from .world import (find_path, compute_fov, make_floor, get_theme,
-                    apply_effect, tick_effects, _bresenham, ENEMY_TEMPLATES)
+                    apply_effect, tick_effects, _bresenham, ENEMY_TEMPLATES,
+                    generate_overland)
 from .data import ITEM_TEMPLATES, LORE_POOL, WIN_TERMINAL, SHOP_STOCK
 from .lore_gen import generate_terminal
 from . import ui
@@ -295,6 +296,60 @@ def run_site(stdscr, site, player):
 
         if key in (ord('r'), ord('R')):
             return 'restart'
+
+        if key == ord('>'):
+            if stair_down and (px, py) == stair_down:
+                current_floor += 1
+                floor_data       = _load_floor(current_floor)
+                tiles            = floor_data['tiles']
+                px, py           = floor_data['start']
+                items_on_map     = floor_data['items']
+                enemies_on_map   = floor_data['enemies']
+                terminals_on_map = floor_data['terminals']
+                special_rooms    = floor_data.get('special_rooms', {})
+                stair_up         = floor_data['stair_up']
+                stair_down       = floor_data['stair_down']
+                explored         = floor_data['explored']
+                hazards_on_map   = floor_data.get('hazards', {})
+                current_theme    = theme_fn(current_floor)
+                player.max_floor_reached = max(player.max_floor_reached, current_floor)
+                log.appendleft(f"You descend to floor {current_floor}.")
+                arrival = current_theme.get('msg')
+                if arrival:
+                    log.appendleft(arrival)
+            else:
+                log.appendleft("No stairs to descend here.")
+
+        if key == ord('<'):
+            if stair_up and (px, py) == stair_up:
+                current_floor -= 1
+                floor_data       = site.floors[current_floor]
+                tiles            = floor_data['tiles']
+                px, py           = floor_data['stair_down']
+                items_on_map     = floor_data['items']
+                enemies_on_map   = floor_data['enemies']
+                terminals_on_map = floor_data['terminals']
+                special_rooms    = floor_data.get('special_rooms', {})
+                stair_up         = floor_data['stair_up']
+                stair_down       = floor_data['stair_down']
+                explored         = floor_data['explored']
+                hazards_on_map   = floor_data.get('hazards', {})
+                current_theme    = theme_fn(current_floor)
+                log.appendleft(f"You ascend to floor {current_floor}.")
+            else:
+                log.appendleft("No stairs to ascend here.")
+
+        if key in (ord('g'), ord('G')):
+            if (px, py) in items_on_map:
+                item = items_on_map[(px, py)]
+                if player.pickup(item):
+                    items_on_map.pop((px, py))
+                    player.items_found += 1
+                    log.appendleft(f"Picked up {item.name}.")
+                else:
+                    log.appendleft("Inventory full.")
+            else:
+                log.appendleft("Nothing here to pick up.")
 
         if key in (ord('i'), ord('I')):
             result = ui.show_equipment_screen(stdscr, player, px, py, items_on_map)
@@ -802,13 +857,8 @@ def run_site(stdscr, site, player):
                             ui.show_levelup_modal(stdscr, player)
                             ui.show_skill_levelup_modal(stdscr, player, points=2)
                         if (px, py) in items_on_map:
-                            picked2 = items_on_map[(px, py)]
-                            if player.pickup(picked2):
-                                items_on_map.pop((px, py))
-                                player.items_found += 1
-                                log.appendleft(f"Picked up {picked2.name}.")
-                            else:
-                                log.appendleft("Inventory full.")
+                            log.appendleft(
+                                f"{items_on_map[(px, py)].name} — press G to pick up.")
 
                         if (px, py) in terminals_on_map:
                             t2 = terminals_on_map[(px, py)]
@@ -866,42 +916,10 @@ def run_site(stdscr, site, player):
                                 break
 
                         if stair_down and (px, py) == stair_down:
-                            current_floor += 1
-                            floor_data       = _load_floor(current_floor)
-                            tiles            = floor_data['tiles']
-                            px, py           = floor_data['start']
-                            items_on_map     = floor_data['items']
-                            enemies_on_map   = floor_data['enemies']
-                            terminals_on_map = floor_data['terminals']
-                            special_rooms    = floor_data.get('special_rooms', {})
-                            stair_up         = floor_data['stair_up']
-                            stair_down       = floor_data['stair_down']
-                            explored         = floor_data['explored']
-                            hazards_on_map   = floor_data.get('hazards', {})
-                            current_theme    = theme_fn(current_floor)
-                            arrival = current_theme.get('msg')
-                            player.max_floor_reached = max(player.max_floor_reached, current_floor)
-                            log.appendleft(f"You descend to floor {current_floor}.")
-                            if arrival:
-                                log.appendleft(arrival)
-                            return 'stairs'
+                            log.appendleft("Stairs down. Press > to descend.")
                         elif stair_up and (px, py) == stair_up:
-                            current_floor -= 1
-                            floor_data       = site.floors[current_floor]
-                            tiles            = floor_data['tiles']
-                            px, py           = floor_data['stair_down']
-                            items_on_map     = floor_data['items']
-                            enemies_on_map   = floor_data['enemies']
-                            terminals_on_map = floor_data['terminals']
-                            special_rooms    = floor_data.get('special_rooms', {})
-                            stair_up         = floor_data['stair_up']
-                            stair_down       = floor_data['stair_down']
-                            explored         = floor_data['explored']
-                            hazards_on_map   = floor_data.get('hazards', {})
-                            current_theme    = theme_fn(current_floor)
-                            log.appendleft(f"You ascend to floor {current_floor}.")
-                            return 'stairs'
-                    return None   # normal move (no stairs, no boss kill)
+                            log.appendleft("Stairs up. Press < to ascend.")
+                    return None   # normal move
 
                 move_result = _do_move(key)
                 if move_result == 'escaped':
@@ -938,7 +956,7 @@ def run_site(stdscr, site, player):
                         log.appendleft("// Neural buffer purged — consciousness reasserting...")
 
                 # Stim: bonus move on same floor
-                if 'stim' in player.active_effects and move_result != 'stairs':
+                if 'stim' in player.active_effects:
                     v_stim = compute_fov(tiles, px, py, player.fov_radius)
                     explored |= v_stim
                     ui.draw(stdscr, tiles, px, py, player, v_stim, explored,
@@ -991,3 +1009,69 @@ def run_site(stdscr, site, player):
                 terminals=terminals_on_map, special_rooms=special_rooms,
                 max_floor=site.depth, theme_override=current_theme,
                 hazards=hazards_on_map, smoke_tiles=smoke_tiles, corruption=corruption)
+
+
+def run_overland(stdscr, site, player):
+    """Run the overland surface exploration loop for a site.
+    Returns 'back_to_ship', 'dead', or 'restart'."""
+    if not site.overland:
+        site.overland = generate_overland(site.name)
+    overland = site.overland
+    ox, oy   = overland['player_start']
+    entrance = overland['dungeon_entrance']
+    landing  = overland['player_start']
+
+    log = collections.deque([''] * LOG_LINES, maxlen=LOG_LINES)
+    log.appendleft(f"You land on {site.name}.")
+
+    MOVE_KEYS_OV = {
+        ord('w'):         ( 0, -1),
+        ord('a'):         (-1,  0),
+        ord('s'):         ( 0,  1),
+        ord('d'):         ( 1,  0),
+        curses.KEY_UP:    ( 0, -1),
+        curses.KEY_LEFT:  (-1,  0),
+        curses.KEY_DOWN:  ( 0,  1),
+        curses.KEY_RIGHT: ( 1,  0),
+    }
+
+    while True:
+        visible = compute_fov(overland['tiles'], ox, oy, FOV_RADIUS * 2)
+        overland['explored'] |= visible
+        ui.draw_overland(stdscr, overland, (ox, oy), site.name, player, log, visible)
+
+        key = stdscr.getch()
+
+        if key in MOVE_KEYS_OV:
+            dx, dy = MOVE_KEYS_OV[key]
+            nx, ny = ox + dx, oy + dy
+            if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                    and overland['tiles'][ny][nx] not in OV_IMPASSABLE):
+                ox, oy = nx, ny
+                tile = overland['tiles'][oy][ox]
+                if (ox, oy) == entrance:
+                    log.appendleft("Dungeon entrance. Press > to enter.")
+                elif (ox, oy) == landing:
+                    log.appendleft("Landing pad. Press B to return to ship.")
+
+        elif key == ord('>'):
+            if (ox, oy) == entrance:
+                result = run_site(stdscr, site, player)
+                ox, oy = entrance
+                if result in ('dead', 'restart'):
+                    return result
+                log.appendleft("You return to the surface.")
+            else:
+                log.appendleft("No dungeon entrance here.")
+
+        elif key in (ord('b'), ord('B')):
+            if (ox, oy) == landing:
+                return 'back_to_ship'
+            else:
+                log.appendleft("Return to the landing pad to leave.")
+
+        elif key in (ord('q'), ord('Q')):
+            return 'back_to_ship'
+
+        elif key in (ord('r'), ord('R')):
+            return 'restart'

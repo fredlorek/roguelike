@@ -302,6 +302,115 @@ def make_sites():
     ]
 
 
+def generate_overland(site_name):
+    """Generate a tile-based overland surface map for a site.
+    Returns dict with tiles, player_start, dungeon_entrance, explored."""
+    tiles = [[OV_OPEN] * MAP_W for _ in range(MAP_H)]
+
+    # Site-specific terrain counts
+    terrain = {
+        'Erebus Station':   {'blocks': 25, 'trees': 5},
+        'Wreck: ISC Calyx': {'blocks': 35, 'trees': 8},
+        'Colony Ruin KE-7': {'blocks': 20, 'trees': 25},
+        'Frontier Town':    {'blocks': 10, 'trees': 20},
+    }
+    cfg = terrain.get(site_name, {'blocks': 15, 'trees': 12})
+
+    # Scatter rock clusters
+    block_seeds = random.randint(max(1, cfg['blocks'] // 5), cfg['blocks'] // 3 + 1)
+    blocks_placed = 0
+    for _ in range(block_seeds * 10):
+        if blocks_placed >= cfg['blocks']:
+            break
+        bx = random.randint(1, MAP_W - 2)
+        by = random.randint(1, MAP_H - 2)
+        size = random.randint(1, 3)
+        for dy in range(-size, size + 1):
+            for dx in range(-size, size + 1):
+                nx, ny = bx + dx, by + dy
+                if (0 < nx < MAP_W - 1 and 0 < ny < MAP_H - 1
+                        and tiles[ny][nx] == OV_OPEN
+                        and blocks_placed < cfg['blocks']):
+                    tiles[ny][nx] = OV_BLOCK
+                    blocks_placed += 1
+
+    # Scatter tree patches
+    trees_placed = 0
+    for _ in range(cfg['trees'] * 5):
+        if trees_placed >= cfg['trees']:
+            break
+        tx = random.randint(1, MAP_W - 2)
+        ty = random.randint(1, MAP_H - 2)
+        if tiles[ty][tx] == OV_OPEN:
+            size = random.randint(1, 2)
+            for dy in range(-size, size + 1):
+                for dx in range(-size, size + 1):
+                    nx, ny = tx + dx, ty + dy
+                    if (0 < nx < MAP_W - 1 and 0 < ny < MAP_H - 1
+                            and tiles[ny][nx] == OV_OPEN
+                            and trees_placed < cfg['trees']):
+                        tiles[ny][nx] = OV_TREE
+                        trees_placed += 1
+
+    # Place landing pad in top-left quadrant, keep 1-tile clearance border
+    lx = random.randint(3, 12)
+    ly = random.randint(3, 8)
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            cx, cy = lx + dx, ly + dy
+            if 0 <= cx < MAP_W and 0 <= cy < MAP_H:
+                tiles[cy][cx] = OV_OPEN
+    tiles[ly][lx] = OV_LANDING
+
+    # Place dungeon entrance in bottom-right quadrant
+    ex = random.randint(MAP_W - 15, MAP_W - 5)
+    ey = random.randint(MAP_H - 10, MAP_H - 4)
+    for dy in range(-1, 2):
+        for dx in range(-1, 2):
+            cx, cy = ex + dx, ey + dy
+            if 0 <= cx < MAP_W and 0 <= cy < MAP_H:
+                tiles[cy][cx] = OV_OPEN
+    tiles[ey][ex] = OV_ENTRANCE
+
+    # BFS connectivity check: ensure landing→entrance reachable
+    from collections import deque
+    visited = set()
+    queue = deque([(lx, ly)])
+    visited.add((lx, ly))
+    while queue:
+        cx, cy = queue.popleft()
+        if (cx, cy) == (ex, ey):
+            break
+        for ndx, ndy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
+            nx, ny = cx + ndx, cy + ndy
+            if (0 <= nx < MAP_W and 0 <= ny < MAP_H
+                    and (nx, ny) not in visited
+                    and tiles[ny][nx] != OV_BLOCK):
+                visited.add((nx, ny))
+                queue.append((nx, ny))
+    else:
+        # Entrance not reached — carve a path (diagonal then straight)
+        cx, cy = lx, ly
+        while cx != ex or cy != ey:
+            if cx < ex:
+                cx += 1
+            elif cx > ex:
+                cx -= 1
+            if cy < ey:
+                cy += 1
+            elif cy > ey:
+                cy -= 1
+            if tiles[cy][cx] == OV_BLOCK:
+                tiles[cy][cx] = OV_OPEN
+
+    return {
+        'tiles':            tiles,
+        'player_start':     (lx, ly),
+        'dungeon_entrance': (ex, ey),
+        'explored':         set(),
+    }
+
+
 def find_path(tiles, start, goal, blocked):
     """A* on the floor grid. blocked: set of (x,y) that cannot be entered.
     goal is always reachable even if in blocked (so enemies can attack the player).

@@ -9,7 +9,7 @@ import sys
 from .ui import (setup_colors, show_character_creation, show_ship_screen,
                  show_nav_computer, show_run_summary)
 from .world import make_sites
-from .game import run_site
+from .game import run_site, run_overland
 
 # ── Save file path (cross-platform) ──────────────────────────────────────────
 if sys.platform == 'win32':
@@ -129,9 +129,9 @@ def main(stdscr):
                 continue   # player pressed Esc
 
             player.fuel -= max(0, site.fuel_cost - player.fuel_discount)
-            result = run_site(stdscr, site, player)
+            result = run_overland(stdscr, site, player)
 
-            if result == 'escaped':
+            if result == 'back_to_ship':
                 save_game(player, sites)
             elif result == 'dead':
                 delete_save()
@@ -145,7 +145,7 @@ def main(stdscr):
                     break   # new run
                 else:
                     return  # quit
-            # result == 'escaped': loop back to ship screen
+            # result == 'back_to_ship': loop back to ship screen
 
 
 if __name__ == '__main__':

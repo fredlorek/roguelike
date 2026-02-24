@@ -101,6 +101,7 @@ class Site:
         self.enemy_density = enemy_density  # multiplier on enemy count
         self.floors        = {}             # floor cache (persists between visits)
         self.cleared       = False          # True after boss defeated
+        self.overland      = {}             # overland map state (generated on first visit)
 
 
 class Enemy:
