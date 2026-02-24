@@ -156,10 +156,15 @@ def main(stdscr):
 
 
 def _prepare_terminal():
-    """Size the console (Windows) and clear scrollback (POSIX) before curses starts."""
+    """Size the console (Windows) and clear screen + scrollback before curses starts."""
     if sys.platform == 'win32':
-        # Resize the cmd window to fit the game (100 cols × 44 rows minimum)
+        # Resize the window first so the clear fills the right dimensions
         os.system('mode con: cols=105 lines=50')
+        # ANSI clear-screen + scrollback (Windows Terminal / ConEmu / modern hosts)
+        sys.stdout.write('\033[2J\033[3J\033[H')
+        sys.stdout.flush()
+        # Classic cls for legacy cmd.exe hosts that ignore ANSI
+        os.system('cls')
     else:
         # Clear visible screen + scrollback so the prompt history is gone
         sys.stdout.write('\033[2J\033[3J\033[H')
