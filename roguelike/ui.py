@@ -2068,27 +2068,25 @@ def show_ship_screen(stdscr, player, sites, current_site=None):
 
         lines = [
             ("THE MERIDIAN",                                          header_attr),
-            ("",                                                      0),
+            (None,                                                    0),
             (f"  Pilot: {player.name}",                              panel_attr),
             (f"  {player.race} {player.char_class}  Lvl {player.level}", panel_attr),
-            ("",                                                      0),
+            (None,                                                    0),
             (f"  HP:    {player.hp} / {player.max_hp}",              panel_attr),
             (f"  CR:    {player.credits}",                            panel_attr),
             (f"  Fuel:  {player.fuel}",                               panel_attr),
-            ("",                                                      0),
+            (None,                                                    0),
             ("  Location:",                                           header_attr),
         ]
 
         if current_site:
             status = " [cleared]" if current_site.cleared else ""
             lines.append((f"  {current_site.name}{status}", panel_attr))
-            lines.append(("  " + current_site.desc[:40],   dim_attr))
+            lines.append(("  " + current_site.desc[:40],   panel_attr))
         else:
-            lines.append(("  In orbit — no destination set.", dim_attr))
+            lines.append(("  In orbit — no destination set.", panel_attr))
 
-        lines += [
-            ("",                                                      0),
-        ]
+        lines += [(None, 0)]
         if current_site:
             lines.append(("  [X] Exit Ship",                         panel_attr))
         lines += [
@@ -2098,11 +2096,14 @@ def show_ship_screen(stdscr, player, sites, current_site=None):
 
         start_row = max(0, (term_h - len(lines)) // 2)
         col_off   = max(0, (term_w - 44) // 2)
-        for i, (text, attr) in enumerate(lines):
-            try:
-                stdscr.addstr(start_row + i, col_off, text[:term_w - col_off - 1], attr)
-            except curses.error:
-                pass
+        row = start_row
+        for text, attr in lines:
+            if text is not None:
+                try:
+                    stdscr.addstr(row, col_off, text[:max(1, term_w - col_off - 1)], attr)
+                except curses.error:
+                    pass
+            row += 1
 
         stdscr.refresh()
         key = stdscr.getch()
