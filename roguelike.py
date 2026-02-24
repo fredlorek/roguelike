@@ -567,6 +567,10 @@ class Player:
         self.active_effects = {}   # effect_name -> remaining_turns
         self.skills       = dict(skills) if skills else {k: 0 for k in SKILL_ORDER}
         self.skill_points = 0   # unspent points; accumulate until spent
+        # Run statistics (reset each new character)
+        self.enemies_killed    = 0
+        self.items_found       = 0
+        self.max_floor_reached = 0
 
     @property
     def atk(self):
@@ -2731,6 +2735,7 @@ def enemy_turn(enemies, tiles, px, py, visible, player,
             if cur in enemies:
                 del enemies[cur]
             occupied.discard(cur)
+            player.enemies_killed += 1
             return True
         return False
 
@@ -2896,35 +2901,67 @@ def enemy_turn(enemies, tiles, px, py, visible, player,
     return msgs
 
 
-def show_game_over(stdscr, player, site_name):
-    """Show game-over screen. Returns True to restart, False to quit."""
-    panel_attr  = curses.color_pair(COLOR_PANEL)
-    header_attr = curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD
+def show_run_summary(stdscr, player, site_name, outcome='dead'):
+    """Run summary screen shown on death or mid-run restart. Returns True to restart, False to quit."""
+    panel  = curses.color_pair(COLOR_PANEL)
+    bold   = curses.color_pair(COLOR_PANEL)    | curses.A_BOLD
+    dim    = curses.color_pair(COLOR_DARK)     | curses.A_DIM
+    red    = curses.color_pair(COLOR_HP_LOW)   | curses.A_BOLD
+    green  = curses.color_pair(COLOR_ITEM)     | curses.A_BOLD
+    yellow = curses.color_pair(COLOR_TARGET)   | curses.A_BOLD
+
+    total_xp = player.xp + player.XP_PER_LEVEL * (player.level * (player.level - 1) // 2)
+
+    if outcome == 'dead':
+        heading      = "MISSION FAILED"
+        heading_attr = red
+        outcome_str  = "Killed in action"
+    else:
+        heading      = "RUN COMPLETE"
+        heading_attr = green
+        outcome_str  = "Returned to the Meridian"
+
+    BOX_W   = 52
+    inner_w = BOX_W - 4
 
     while True:
         term_h, term_w = stdscr.getmaxyx()
         stdscr.erase()
 
-        lines = [
-            ("* YOU DIED *",                         header_attr),
-            ("",                                     0),
-            (f"Name:   {player.name}",               panel_attr),
-            (f"Race:   {player.race}",               panel_attr),
-            (f"Class:  {player.char_class}",         panel_attr),
-            ("",                                     0),
-            (f"Last site: {site_name}",              panel_attr),
-            (f"Level:     {player.level}",           panel_attr),
-            ("",                                     0),
-            ("R: new character    Q: quit",          panel_attr),
-        ]
+        # Centre the box
+        bx = max(0, (term_w - BOX_W) // 2)
+        by = max(0, (term_h - 22) // 2)
 
-        start_row = max(0, (term_h - len(lines)) // 2)
-        for i, (text, attr) in enumerate(lines):
-            col = max(0, (term_w - len(text)) // 2)
+        def row(y, text, attr, centre=False):
+            x = bx + 2 + (max(0, inner_w - len(text)) // 2 if centre else 0)
             try:
-                stdscr.addstr(start_row + i, col, text, attr)
+                stdscr.addstr(by + y, x, text[:inner_w], attr)
             except curses.error:
                 pass
+
+        div = "─" * inner_w
+
+        row(0,  heading,                              heading_attr, centre=True)
+        row(1,  div,                                  dim)
+        row(2,  "",                                   0)
+        row(3,  f"{player.name}",                     bold, centre=True)
+        row(4,  f"{player.race}  {player.char_class}", panel, centre=True)
+        row(5,  "",                                   0)
+        row(6,  div,                                  dim)
+        row(7,  f"  Site          {site_name}",       panel)
+        row(8,  f"  Outcome       {outcome_str}",     panel)
+        row(9,  f"  Deepest floor {player.max_floor_reached}", panel)
+        row(10, div,                                  dim)
+        row(11, "",                                   0)
+        row(12, f"  Enemies killed   {player.enemies_killed}", yellow)
+        row(13, f"  Items collected  {player.items_found}",    yellow)
+        row(14, f"  Total XP         {total_xp}",              yellow)
+        row(15, f"  Final level      {player.level}",          yellow)
+        row(16, f"  Credits          {player.credits} cr",     yellow)
+        row(17, "",                                   0)
+        row(18, div,                                  dim)
+        row(19, "",                                   0)
+        row(20, "[ R ] New run          [ Q ] Quit",  bold, centre=True)
 
         stdscr.refresh()
         key = stdscr.getch()
@@ -3368,6 +3405,8 @@ def run_site(stdscr, site, player):
     explored         = floor_data['explored']
     hazards_on_map   = floor_data.get('hazards', {})
 
+    player.max_floor_reached = max(player.max_floor_reached, current_floor)
+
     log     = collections.deque(maxlen=LOG_LINES)
     visible = compute_fov(tiles, px, py, player.fov_radius)
     explored |= visible
@@ -3796,6 +3835,7 @@ def run_site(stdscr, site, player):
                             enemy.hp -= dmg
                             if enemy.hp <= 0:
                                 del enemies_on_map[hit_pos]
+                                player.enemies_killed += 1
                                 if enemy.behaviour == 'exploder':
                                     kx, ky = hit_pos
                                     if abs(kx - px) + abs(ky - py) <= 1:
@@ -3861,6 +3901,7 @@ def run_site(stdscr, site, player):
                         en2.hp -= dmg2
                         if en2.hp <= 0:
                             del enemies_on_map[(nx2, ny2)]
+                            player.enemies_killed += 1
                             if en2.behaviour == 'exploder':
                                 splash2 = max(1, int(en2.atk * 0.5))
                                 player.hp -= splash2
@@ -3921,6 +3962,7 @@ def run_site(stdscr, site, player):
                             picked2 = items_on_map[(px, py)]
                             if player.pickup(picked2):
                                 items_on_map.pop((px, py))
+                                player.items_found += 1
                                 log.appendleft(f"Picked up {picked2.name}.")
                             else:
                                 log.appendleft("Inventory full.")
@@ -3995,6 +4037,7 @@ def run_site(stdscr, site, player):
                             hazards_on_map   = floor_data.get('hazards', {})
                             current_theme    = theme_fn(current_floor)
                             arrival = current_theme.get('msg')
+                            player.max_floor_reached = max(player.max_floor_reached, current_floor)
                             log.appendleft(f"You descend to floor {current_floor}.")
                             if arrival:
                                 log.appendleft(arrival)
@@ -4257,13 +4300,16 @@ def main(stdscr):
             result = run_site(stdscr, site, player)
 
             if result == 'dead':
-                if show_game_over(stdscr, player, site.name):
+                if show_run_summary(stdscr, player, site.name, outcome='dead'):
                     break   # new run
                 else:
                     return  # quit
 
             if result == 'restart':
-                break   # new run
+                if show_run_summary(stdscr, player, site.name, outcome='restart'):
+                    break   # new run
+                else:
+                    return  # quit
             # result == 'escaped': loop back to ship screen
 
 

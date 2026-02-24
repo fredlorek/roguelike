@@ -116,9 +116,11 @@ Terminal hacks reduce it by 30. Tiers: Whisper (25) → Interference (50) → Ca
 
 Planned order (each unblocks the next):
 
-### 1. Run summary screen
-Show a recap after death or run-end: site, floors reached, enemies killed, XP, cause of death.
-Needs kill/floor counters on `Player`. `show_run_summary()` alongside `show_game_over()`.
+### ~~1. Run summary screen~~ ✓ DONE
+`show_run_summary(stdscr, player, site_name, outcome)` replaces `show_game_over`. Shown on
+death and mid-run restart (R key). Tracks `player.enemies_killed`, `player.items_found`,
+`player.max_floor_reached`. Displays site, outcome, deepest floor, enemies killed, items
+collected, total XP, final level, credits. `[ R ] New run  [ Q ] Quit` at the bottom.
 
 ### 2. Reorganize into a package
 Split `roguelike.py` into:
