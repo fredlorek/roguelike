@@ -1249,7 +1249,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                max_floor=max_floor, floor_name=theme['name'])
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  H:hack  E:disarm  U:use  X:tool  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  M:map  H:hack  E:disarm  U:use  X:tool  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -1274,6 +1274,166 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
             pass
 
     stdscr.refresh()
+
+
+def show_minimap(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+                 stair_up, stair_down, enemies_on_map, terminals_on_map,
+                 hazards_on_map, special_rooms, current_floor, site_depth,
+                 floor_name, current_theme, smoke_tiles=None):
+    """Full-screen floor map overlay. WASD/arrows pan the view; M or Esc closes."""
+
+    # Room-centroid glyphs: shown at the geometric centre of each explored special room
+    ROOM_GLYPHS = {
+        'shop':         ('$', COLOR_ITEM),
+        'armory':       ('A', COLOR_ENEMY),
+        'medbay':       ('+', COLOR_PANEL),
+        'terminal_hub': ('H', COLOR_TERMINAL),
+        'vault':        ('V', COLOR_STAIR),
+    }
+    room_label_map = {}   # (x, y) → (char, color_pair_index)
+    if special_rooms:
+        for spec in special_rooms.values():
+            rtype = spec.get('type', '')
+            if rtype in ROOM_GLYPHS and any(t in explored for t in spec['tiles']):
+                xs = [t[0] for t in spec['tiles']]
+                ys = [t[1] for t in spec['tiles']]
+                if xs and ys:
+                    cx = (min(xs) + max(xs)) // 2
+                    cy = (min(ys) + max(ys)) // 2
+                    room_label_map[(cx, cy)] = ROOM_GLYPHS[rtype]
+
+    # Exploration percentage
+    total_floor    = sum(1 for y in range(MAP_H) for x in range(MAP_W)
+                        if tiles[y][x] == FLOOR)
+    explored_floor = sum(1 for (x, y) in explored
+                        if 0 <= y < MAP_H and 0 <= x < MAP_W and tiles[y][x] == FLOOR)
+    pct = int(100 * explored_floor / total_floor) if total_floor else 0
+
+    wall_attr = curses.color_pair(current_theme['wall_cp']) | curses.A_DIM
+
+    # Camera starts centred on player; WASD will pan it
+    term_h, term_w = stdscr.getmaxyx()
+    map_rows = max(1, term_h - 2)   # row 0 = header, bottom row = legend
+    map_cols = term_w
+    cam_x = max(0, min(px - map_cols // 2, max(0, MAP_W - map_cols)))
+    cam_y = max(0, min(py - map_rows // 2, max(0, MAP_H - map_rows)))
+
+    PAN_KEYS = {
+        ord('w'): ( 0, -3), ord('a'): (-3,  0),
+        ord('s'): ( 0,  3), ord('d'): ( 3,  0),
+        curses.KEY_UP:   ( 0, -3), curses.KEY_LEFT:  (-3,  0),
+        curses.KEY_DOWN: ( 0,  3), curses.KEY_RIGHT: ( 3,  0),
+    }
+
+    while True:
+        term_h, term_w = stdscr.getmaxyx()
+        map_rows = max(1, term_h - 2)
+        map_cols = term_w
+        cam_x = max(0, min(cam_x, max(0, MAP_W - map_cols)))
+        cam_y = max(0, min(cam_y, max(0, MAP_H - map_rows)))
+
+        stdscr.erase()
+
+        # --- Header ---
+        pct_cp = (COLOR_ITEM   if pct >= 80 else
+                  COLOR_TARGET if pct >= 50 else COLOR_HP_LOW)
+        title   = f" FLOOR MAP  {floor_name}  Floor {current_floor}/{site_depth}  "
+        exp_str = f"Explored: {pct}%  "
+        try:
+            stdscr.addstr(0, 0, (title + exp_str)[:term_w - 1],
+                          curses.color_pair(COLOR_PANEL) | curses.A_BOLD)
+            stdscr.addstr(0, len(title), exp_str[:term_w - len(title) - 1],
+                          curses.color_pair(pct_cp) | curses.A_BOLD)
+        except curses.error:
+            pass
+
+        # --- Map tiles ---
+        for sy in range(map_rows):
+            my = sy + cam_y
+            if my >= MAP_H:
+                break
+            for sx in range(map_cols):
+                mx = sx + cam_x
+                if mx >= MAP_W:
+                    break
+                if (mx, my) not in explored:
+                    continue
+
+                in_sight = (mx, my) in visible
+                ch, attr = None, curses.A_DIM
+
+                if mx == px and my == py:
+                    ch   = '@'
+                    attr = curses.color_pair(COLOR_PLAYER) | curses.A_BOLD
+                elif stair_down and (mx, my) == stair_down:
+                    ch   = '>'
+                    attr = curses.color_pair(COLOR_STAIR) | (curses.A_BOLD if in_sight else curses.A_DIM)
+                elif stair_up and (mx, my) == stair_up:
+                    ch   = '<'
+                    attr = curses.color_pair(COLOR_STAIR) | (curses.A_BOLD if in_sight else curses.A_DIM)
+                elif in_sight and enemies_on_map and (mx, my) in enemies_on_map:
+                    e  = enemies_on_map[(mx, my)]
+                    cp = {'ranged':   COLOR_ENEMY_RANGE,
+                          'fast':     COLOR_ENEMY_FAST,
+                          'brute':    COLOR_ENEMY_BRUTE,
+                          'exploder': COLOR_ENEMY_EXPL,
+                         }.get(e.behaviour, COLOR_ENEMY)
+                    ch   = e.char
+                    attr = curses.color_pair(cp) | curses.A_BOLD
+                elif items_on_map and (mx, my) in items_on_map:
+                    ch   = items_on_map[(mx, my)].char
+                    attr = curses.color_pair(COLOR_ITEM) | (curses.A_BOLD if in_sight else curses.A_DIM)
+                elif terminals_on_map and (mx, my) in terminals_on_map:
+                    t    = terminals_on_map[(mx, my)]
+                    ch   = 'T' if not t.read else 't'
+                    attr = curses.color_pair(COLOR_TERMINAL) | (curses.A_BOLD if in_sight else curses.A_DIM)
+                elif hazards_on_map and (mx, my) in hazards_on_map:
+                    h = hazards_on_map[(mx, my)]
+                    if player.skills.get('engineering', 0) >= 1 or h['revealed']:
+                        ch   = h['char']
+                        attr = curses.color_pair(COLOR_HAZARD) | (curses.A_BOLD if in_sight else curses.A_DIM)
+                    else:
+                        ch   = tiles[my][mx]
+                        attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
+                elif smoke_tiles and (mx, my) in smoke_tiles:
+                    ch   = '%'
+                    attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
+                elif (mx, my) in room_label_map:
+                    glyph_ch, glyph_cp = room_label_map[(mx, my)]
+                    ch   = glyph_ch
+                    attr = curses.color_pair(glyph_cp) | curses.A_BOLD
+                elif tiles[my][mx] == WALL:
+                    ch   = '#'
+                    attr = wall_attr
+                else:
+                    ch   = '.'
+                    attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
+
+                if ch is not None:
+                    try:
+                        stdscr.addch(sy + 1, sx, ch, attr)
+                    except curses.error:
+                        pass
+
+        # --- Legend ---
+        legend = ("[M/Esc]Close  [WASD]Pan   "
+                  "@ You  # Wall  > Stair  ! Item  T Terminal  ^ Trap  % Smoke  "
+                  "$ Shop  A Armory  + Medbay  H Hub  V Vault")
+        try:
+            stdscr.addstr(term_h - 1, 0, legend[:term_w - 1],
+                          curses.color_pair(COLOR_DARK) | curses.A_DIM)
+        except curses.error:
+            pass
+
+        stdscr.refresh()
+
+        key = stdscr.getch()
+        if key in (ord('m'), ord('M'), 27):
+            break
+        if key in PAN_KEYS:
+            dx, dy = PAN_KEYS[key]
+            cam_x = max(0, min(cam_x + dx, max(0, MAP_W - map_cols)))
+            cam_y = max(0, min(cam_y + dy, max(0, MAP_H - map_rows)))
 
 
 def show_equipment_screen(stdscr, player, px=0, py=0, items_on_map=None):
@@ -3159,6 +3319,14 @@ def run_site(stdscr, site, player):
 
         if key in (ord('k'), ord('K')):
             show_skills_screen(stdscr, player)
+
+        if key in (ord('m'), ord('M')):
+            show_minimap(stdscr, tiles, px, py, player, visible, explored,
+                         items_on_map, stair_up, stair_down, enemies_on_map,
+                         terminals_on_map, hazards_on_map, special_rooms,
+                         current_floor, site.depth,
+                         current_theme.get('name', ''), current_theme,
+                         smoke_tiles=smoke_tiles)
 
         if key in (ord('h'), ord('H')):
             if 'stun' in player.active_effects:

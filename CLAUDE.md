@@ -208,12 +208,16 @@ resets the counter. Makes the late-game theme mechanically tangible without a ne
 
 ---
 
-### 7. Minimap overlay
+### ~~7. Minimap overlay~~ ✓ DONE
 
-`M` key draws a full-screen greyscale overview of the current floor using the `explored`
-set. Walls in dim white, floor in dim black, stairs/items/enemies as coloured glyphs.
-Pure rendering — no logic changes. Closes the navigation loop on large floors and rewards
-thorough exploration.
+`M` key opens `show_minimap()`: full-screen floor view using `explored` set. Walls `#`
+in themed dim colour, floor `.` dim, stairs `><` magenta, items green, terminals cyan,
+hazards (if known) red, smoke `%` dim, player `@` yellow bold. Enemies shown in their
+behaviour colours when currently visible. Special room centroids show a glyph if the
+room has been entered: `$` shop, `A` armory, `+` medbay, `H` hub, `V` vault.
+
+Header shows floor name, floor N/site_depth, and exploration % (green ≥80%, yellow ≥50%,
+red <50%). WASD / arrows pan the camera; M or Esc closes. Legend row at bottom.
 
 ---
 
@@ -274,6 +278,7 @@ Game logic and rendering are deliberately kept separate:
 | `B` | Back to ship (floor 1 only) |
 | `I` | Equipment screen |
 | `K` | Skills screen (read-only; spend banked SP if any) |
+| `M` | Minimap overlay (full-screen floor view; WASD to pan; M/Esc to close) |
 | `H` | Hack terminal (on terminal tile) or remote-pick unread terminal (Hacking 5, off-tile) |
 | `E` | Disarm adjacent/current trap (Engineering 2+ required; costs a turn) |
 | `U` | Use first consumable (grenades auto-target nearest visible enemy) |
