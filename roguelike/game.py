@@ -322,6 +322,8 @@ def run_site(stdscr, site, player):
 
         if key == ord('<'):
             if stair_up and (px, py) == stair_up:
+                if current_floor == 1:
+                    return 'escaped'
                 current_floor -= 1
                 floor_data       = site.floors[current_floor]
                 tiles            = floor_data['tiles']
@@ -918,7 +920,10 @@ def run_site(stdscr, site, player):
                         if stair_down and (px, py) == stair_down:
                             log.appendleft("Stairs down. Press > to descend.")
                         elif stair_up and (px, py) == stair_up:
-                            log.appendleft("Stairs up. Press < to ascend.")
+                            if current_floor == 1:
+                                log.appendleft("Exit. Press < to return to surface.")
+                            else:
+                                log.appendleft("Stairs up. Press < to ascend.")
                     return None   # normal move
 
                 move_result = _do_move(key)

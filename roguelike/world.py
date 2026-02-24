@@ -199,7 +199,7 @@ def make_floor(floor_num, theme_fn=None, enemy_density=1.0, is_final=False, plac
     else:
         start = (MAP_W // 2, MAP_H // 2)
 
-    stair_up   = start if floor_num > 1 else None
+    stair_up   = start   # floor 1: marks exit back to overland; floors 2+: stair tile
     stair_down = None if is_final else (rooms[-1].center() if rooms else start)
 
     exclude_set = {stair_up, stair_down, start} - {None}
