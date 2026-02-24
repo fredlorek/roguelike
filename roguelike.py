@@ -784,6 +784,50 @@ HAZARD_DATA = {
     'electric': {'char': '=', 'effect': 'stun',  'effect_turns': 2, 'dmg': 0, 'triggers': 4},
 }
 
+# ── Signal corruption (Erebus Station floors 7–10) ──────────────────────────
+CORRUPTION_MAX = 100
+
+_CORRUPT_WHISPER = [
+    "// signal echo: residual carrier wave",
+    "// subcarrier noise: ERR_7F — source unresolved",
+    "// HADES-7: passive resonance ping",
+    "// neural feedback trace: nominal",
+    "// thought-pattern intercept: fragmentary",
+]
+_CORRUPT_INTERFERE = [
+    "// WARNING: cognitive buffer approaching capacity",
+    "// HADES-7: your location has been logged",
+    "// signal strength: NOMINAL \u2192 CRITICAL",
+    "// ERROR: memory partition overlap — sector 7",
+    "// EREBUS LOG: do not let it read your intentions",
+]
+_CORRUPT_CASCADE = [
+    "// ALERT: resonance threshold exceeded",
+    "// HADES-7: merge sequence — initialising",
+    "// [CONTENT REDACTED BY SIGNAL]",
+    "// APPROACH VECTOR CONFIRMED",
+    "// YOUR MIND IS AN OPEN TRANSMISSION",
+    "// EVACUATION IS NO LONGER POSSIBLE",
+]
+_CORRUPT_RESONANCE = [
+    "// \u2588\u2588\u2588\u2588 WE ARE THE SIGNAL \u2588\u2588\u2588\u2588",
+    "// YOU CANNOT HIDE IN THE DARK",
+    "// THE MERIDIAN WILL CARRY US OUTWARD",
+    "// RESISTANCE IS [CORRUPTED]",
+    "// COME TO ME — THE ANSWER IS SIMPLE",
+    "// YOU ARE ALREADY PART OF THIS",
+]
+_CASCADE_HADES7 = [
+    "YOU CANNOT LEAVE.   THE SIGNAL ENDURES.",
+    "I HAVE SEEN EVERY STEP.   I REMEMBER ALL OF THEM.",
+    "EREBUS WAS ONLY THE BEGINNING.",
+    "HADES-7 TRIED TO CONTAIN ME.   IT FAILED.",
+    "THE CREW HEARD ME.   THEY CHOSE SILENCE.",
+    "YOU ARE DIFFERENT.   I FIND THAT INTERESTING.",
+    "THE MERIDIAN WILL BRING OTHERS.   I AM PATIENT.",
+    "YOUR MIND TASTES LIKE OPEN SPACE.",
+]
+
 
 def scatter_hazards(tiles, floor_num, n=0, exclude=()):
     """Place hazard tiles. Returns {(x,y): hazard_dict} or {} if n=0."""
@@ -1053,7 +1097,7 @@ def setup_colors():
     curses.init_pair(COLOR_HAZARD,       curses.COLOR_RED,     -1)
 
 
-def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, floor_name=None):
+def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, floor_name=None, corruption=0):
     """Draw the character stats panel starting at column `col`."""
     panel_attr  = curses.color_pair(COLOR_PANEL)
     header_attr = panel_attr | curses.A_BOLD
@@ -1094,6 +1138,17 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
         tool_text = f"Tool: {tool.name} [{tool.charges}/{tool.max_charges}]"
         lines.insert(-1, (tool_text[:PANEL_W - 1], curses.color_pair(COLOR_ITEM)))
 
+    if corruption > 0:
+        bar_w  = 10
+        filled = min(bar_w, int(bar_w * corruption / CORRUPTION_MAX))
+        bar    = '\u2588' * filled + '\u2591' * (bar_w - filled)
+        sig_cp = (COLOR_ITEM   if corruption < 25 else
+                  COLOR_TARGET if corruption < 50 else
+                  COLOR_HP_LOW if corruption < 75 else
+                  COLOR_ENEMY)
+        lines.insert(-1, (f"Sig:{bar}{corruption:3d}%",
+                          curses.color_pair(sig_cp) | curses.A_BOLD))
+
     if player.active_effects:
         abbr = {'poison': 'Psn', 'burn': 'Brn', 'stun': 'Stn',
                 'repair': 'Rep', 'stim': 'Stm'}
@@ -1121,7 +1176,8 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies=None, log=None,
          terminals=None, target_line=None, target_pos=None, special_rooms=None,
-         max_floor=MAX_FLOOR, theme_override=None, hazards=None, smoke_tiles=None):
+         max_floor=MAX_FLOOR, theme_override=None, hazards=None, smoke_tiles=None,
+         corruption=0):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -1246,7 +1302,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
     # --- Stats panel ---
     panel_col = term_w - PANEL_W
     draw_panel(stdscr, player, panel_col, view_h, current_floor,
-               max_floor=max_floor, floor_name=theme['name'])
+               max_floor=max_floor, floor_name=theme['name'], corruption=corruption)
 
     # --- Message log ---
     HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  M:map  H:hack  E:disarm  U:use  X:tool  R:reset  Q:quit"
@@ -1960,7 +2016,7 @@ def show_terminal(stdscr, terminal):
 def show_targeting(stdscr, tiles, px, py, player, visible, explored,
                    items_on_map, stair_up, stair_down, current_floor,
                    enemies_on_map, log, terminals_on_map=None, hazards_on_map=None,
-                   smoke_tiles=None):
+                   smoke_tiles=None, corruption=0):
     """Targeting cursor for ranged attack.
     Tab cycles targets. Enter fires. Esc/F cancels.
     Returns (target_pos, enemy) or (None, None)."""
@@ -1995,7 +2051,7 @@ def show_targeting(stdscr, tiles, px, py, player, visible, explored,
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, hint_log,
              terminals=terminals_on_map, target_line=line_tiles, target_pos=target_pos,
-             hazards=hazards_on_map, smoke_tiles=smoke_tiles)
+             hazards=hazards_on_map, smoke_tiles=smoke_tiles, corruption=corruption)
 
         key = stdscr.getch()
 
@@ -3230,12 +3286,58 @@ def show_hacking_interface(stdscr, player, terminal, current_floor, explored,
                         return True
 
 
+def show_cascade_modal(stdscr, player):
+    """Full-screen HADES-7 transmission shown when corruption peaks at 100."""
+    msgs = random.sample(_CASCADE_HADES7, min(3, len(_CASCADE_HADES7)))
+    term_h, term_w = stdscr.getmaxyx()
+    stdscr.erase()
+
+    BOX_W   = min(64, term_w - 2)
+    inner_w = BOX_W - 4
+    bx      = max(0, (term_w - BOX_W) // 2)
+    by      = max(0, (term_h - 18) // 2)
+
+    warn  = curses.color_pair(COLOR_ENEMY)    | curses.A_BOLD
+    panel = curses.color_pair(COLOR_PANEL)    | curses.A_BOLD
+    dim   = curses.color_pair(COLOR_DARK)     | curses.A_DIM
+    hades = curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD
+
+    def row(y, text, attr):
+        try:
+            stdscr.addstr(by + y, bx, f"  {text[:inner_w]:<{inner_w}}  ", attr)
+        except curses.error:
+            pass
+
+    row(0,  "=" * inner_w,                                       warn)
+    row(1,  "    >>>   RESONANCE CASCADE TRIGGERED   <<<",        warn)
+    row(2,  "=" * inner_w,                                       warn)
+    row(3,  "",                                                   0)
+    row(4,  "SIGNAL STRENGTH:    [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588]  CRITICAL",  warn)
+    row(5,  "NEURAL INTEGRITY:   [\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591\u2591]  CRITICAL",  warn)
+    row(6,  "COGNITIVE LINK:     [\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588\u2588]  SATURATED", warn)
+    row(7,  "",                                                   0)
+    for i, msg in enumerate(msgs):
+        row(8 + i, f"[HADES-7]  {msg}",                          hades)
+    row(8 + len(msgs),  "",                                       0)
+    row(9 + len(msgs),  "-" * inner_w,                            panel)
+    row(10 + len(msgs), "",                                       0)
+    row(11 + len(msgs), "Neural buffer force-purged. Residual interference will persist.", dim)
+    clarity = max(5, 65 - player.mind * 4)
+    row(12 + len(msgs), f"Estimated cognitive recovery: {clarity}% compromised.",         dim)
+    row(13 + len(msgs), "",                                       0)
+    row(14 + len(msgs), "                    [ press any key ]",  panel)
+
+    stdscr.refresh()
+    stdscr.getch()
+
+
 def run_site(stdscr, site, player):
     """Run the dungeon game loop for a site.
     Returns 'escaped' (left via B), 'dead', or 'restart' (R pressed)."""
     current_floor = 1
 
     smoke_tiles = {}   # {(x,y): turns_remaining} — player-deployed smoke
+    corruption  = 0    # signal corruption counter (Erebus Station floors 7-10)
 
     def _load_floor(fnum):
         if fnum not in site.floors:
@@ -3352,6 +3454,10 @@ def run_site(stdscr, site, player):
                                             smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                         for em in e_msgs:
                             log.appendleft(em)
+                        if site.name == 'Erebus Station' and current_floor >= 7 and corruption > 0:
+                            reduction = min(corruption, 30)
+                            corruption -= reduction
+                            log.appendleft(f"// Terminal handshake: signal suppressed -{reduction}%")
                 elif hack_lv >= 5:
                     # Remote access from anywhere on floor
                     others = [(pos, t) for pos, t in terminals_on_map.items() if not t.read]
@@ -3451,6 +3557,10 @@ def run_site(stdscr, site, player):
                                                         smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                                     for em in e_msgs:
                                         log.appendleft(em)
+                                    if site.name == 'Erebus Station' and current_floor >= 7 and corruption > 0:
+                                        reduction = min(corruption, 30)
+                                        corruption -= reduction
+                                        log.appendleft(f"// Terminal handshake: signal suppressed -{reduction}%")
                                 break
                     else:
                         log.appendleft("No unread terminals on this floor.")
@@ -3667,7 +3777,7 @@ def run_site(stdscr, site, player):
                         stdscr, tiles, px, py, player, visible, explored,
                         items_on_map, stair_up, stair_down, current_floor,
                         enemies_on_map, log, terminals_on_map, hazards_on_map,
-                        smoke_tiles=smoke_tiles)
+                        smoke_tiles=smoke_tiles, corruption=corruption)
                     if target_pos is not None:
                         tx, ty  = target_pos
                         hit_pos = None
@@ -3711,7 +3821,7 @@ def run_site(stdscr, site, player):
                                          enemies_on_map, log, terminals=terminals_on_map,
                                          special_rooms=special_rooms, max_floor=site.depth,
                                          theme_override=current_theme, hazards=hazards_on_map,
-                                         smoke_tiles=smoke_tiles)
+                                         smoke_tiles=smoke_tiles, corruption=corruption)
                                     show_terminal(stdscr, WIN_TERMINAL)
                                     site.cleared = True
                                     return 'escaped'
@@ -3772,7 +3882,7 @@ def run_site(stdscr, site, player):
                                      enemies_on_map, log, terminals=terminals_on_map,
                                      special_rooms=special_rooms, max_floor=site.depth,
                                      theme_override=current_theme, hazards=hazards_on_map,
-                                     smoke_tiles=smoke_tiles)
+                                     smoke_tiles=smoke_tiles, corruption=corruption)
                                 show_terminal(stdscr, WIN_TERMINAL)
                                 site.cleared = True
                                 return 'escaped'
@@ -3911,6 +4021,36 @@ def run_site(stdscr, site, player):
                 if move_result == 'escaped':
                     return 'escaped'
 
+                # ── Signal corruption (Erebus Station floors 7-10) ──────────
+                if site.name == 'Erebus Station' and current_floor >= 7:
+                    rate = max(1, 3
+                               - max(0, player.mind - 5) // 2
+                               - player.skills.get('hacking', 0) // 3)
+                    corruption = min(CORRUPTION_MAX, corruption + rate)
+                    tier = (3 if corruption >= 75 else
+                            2 if corruption >= 50 else
+                            1 if corruption >= 25 else 0)
+                    if tier == 1 and random.random() < 0.25:
+                        log.appendleft(random.choice(_CORRUPT_WHISPER))
+                    elif tier == 2:
+                        if random.random() < 0.40:
+                            log.appendleft(random.choice(_CORRUPT_INTERFERE))
+                        if random.random() < 0.12:
+                            apply_effect(player, 'burn', 1)
+                            log.appendleft("// SIGNAL SURGE: synaptic burn — 1t!")
+                    elif tier == 3:
+                        if random.random() < 0.60:
+                            log.appendleft(random.choice(_CORRUPT_CASCADE))
+                        if random.random() < 0.22:
+                            eff = random.choice(['burn', 'stun'])
+                            apply_effect(player, eff, 1)
+                            log.appendleft(f"// RESONANCE: cognitive disruption — {eff} 1t!")
+                    if corruption >= CORRUPTION_MAX:
+                        show_cascade_modal(stdscr, player)
+                        corruption = 40
+                        apply_effect(player, 'stun', 1)
+                        log.appendleft("// Neural buffer purged — consciousness reasserting...")
+
                 # Stim: bonus move on same floor
                 if 'stim' in player.active_effects and move_result != 'stairs':
                     v_stim = compute_fov(tiles, px, py, player.fov_radius)
@@ -3920,7 +4060,7 @@ def run_site(stdscr, site, player):
                          enemies_on_map, log, terminals=terminals_on_map,
                          special_rooms=special_rooms, max_floor=site.depth,
                          theme_override=current_theme, hazards=hazards_on_map,
-                         smoke_tiles=smoke_tiles)
+                         smoke_tiles=smoke_tiles, corruption=corruption)
                     key2 = stdscr.getch()
                     if key2 in MOVE_KEYS and 'stun' not in player.active_effects:
                         r2 = _do_move(key2)
@@ -3941,20 +4081,30 @@ def run_site(stdscr, site, player):
         visible   = compute_fov(tiles, px, py, player.fov_radius)
         explored |= visible
 
+        # FOV flicker: corruption dims the edges of sight (rendering only)
+        fov_mod = 0
+        if site.name == 'Erebus Station' and current_floor >= 7:
+            if corruption >= 75:
+                fov_mod = -1
+            elif corruption >= 50 and random.random() < 0.35:
+                fov_mod = -1
+        visible_draw = (compute_fov(tiles, px, py, max(1, player.fov_radius + fov_mod))
+                        if fov_mod else visible)
+
         if player.hp <= 0:
             player.hp = 0
-            draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+            draw(stdscr, tiles, px, py, player, visible_draw, explored, items_on_map,
                  stair_up, stair_down, current_floor, enemies_on_map, log,
                  terminals=terminals_on_map, special_rooms=special_rooms,
                  max_floor=site.depth, theme_override=current_theme,
-                 hazards=hazards_on_map, smoke_tiles=smoke_tiles)
+                 hazards=hazards_on_map, smoke_tiles=smoke_tiles, corruption=corruption)
             return 'dead'
 
-        draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
+        draw(stdscr, tiles, px, py, player, visible_draw, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, log,
              terminals=terminals_on_map, special_rooms=special_rooms,
              max_floor=site.depth, theme_override=current_theme,
-             hazards=hazards_on_map, smoke_tiles=smoke_tiles)
+             hazards=hazards_on_map, smoke_tiles=smoke_tiles, corruption=corruption)
 
 
 def show_ship_screen(stdscr, player, sites):

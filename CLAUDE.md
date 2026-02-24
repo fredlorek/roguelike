@@ -197,14 +197,30 @@ passed to `enemy_turn()` and `draw()`.
 
 ---
 
-### 6. Signal corruption mechanic
+### ~~6. Signal corruption mechanic~~ ✓ DONE
 
-On Erebus Station floors 7–10, a per-turn `corruption` counter increments each move.
-As it rises it triggers escalating effects: dim FOV flicker (reduce radius by 1 for one
-turn), phantom enemy sounds in the log, random -1 penalties to a stat for 3 turns. At
-maximum corruption the player enters a "resonance cascade" state — the signal is actively
-trying to communicate. High Mind stat reduces corruption rate; completing a terminal read
-resets the counter. Makes the late-game theme mechanically tangible without a new system.
+`corruption` counter (0–100) in `run_site()`, active on Erebus Station floors 7–10.
+Increments each move: `rate = max(1, 3 - (mind-5)//2 - hacking//3)` — high Mind and
+Hacking reduce the rate. Terminal hacks that consume a turn reduce corruption by 30.
+
+**Tiers and effects (applied after each move):**
+| Range | Tier | Effects |
+|---|---|---|
+| 0–24 | Clean | none |
+| 25–49 | Whisper | 25% chance: phantom sound in log |
+| 50–74 | Interference | 40% phantom sound; 12% synaptic burn 1t; 35% FOV flicker (-1 radius, rendering only) |
+| 75–99 | Cascade | 60% phantom sound; 22% random stun/burn 1t; FOV always -1 |
+| 100 | Resonance | `show_cascade_modal()` + reset to 40 + stun 1t |
+
+**`show_cascade_modal()`**: full-screen HADES-7 transmission overlay — bars showing
+SIGNAL/NEURAL/COGNITIVE status, 3 random transmissions from `_CASCADE_HADES7` pool,
+estimated cognitive compromise based on Mind stat.
+
+**Panel**: `Sig:████░░░░░░  67%` row added to `draw_panel()` when `corruption > 0`,
+colour-coded green < 25%, yellow < 50%, orange < 75%, red ≥ 75%.
+
+**FOV flicker** is rendering-only (`visible_draw` separate from `visible`); AI and
+explored tracking always use the full-radius `visible`.
 
 ---
 
