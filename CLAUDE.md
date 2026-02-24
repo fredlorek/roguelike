@@ -245,15 +245,71 @@ All tallying requires adding a few counters to `Player` (enemies killed, floors 
 Display function lives alongside `show_game_over`. Closes the feedback loop and gives each
 run a concrete shape.
 
+**Do this first** — small, isolated, no dependencies on the items below.
+
 ---
 
-### 9. Difficulty and challenge modes
+### 9. ~~Difficulty and challenge modes~~ — DROPPED
 
-Difficulty selector at character creation: Normal / Hard / Ironman.
-- **Hard** — enemy ATK/HP +25%; shop prices +50%; fuel costs +1 per site
-- **Ironman** — saves disabled (already the case), `R` (new run) disabled inside a site;
-  death is permanent and the game returns to the main menu with no option to continue
-A `difficulty` flag on `Player` drives the multipliers; no new systems required.
+Removed from scope. May revisit in a later planning session if the game calls for it.
+
+---
+
+### 10. Reorganize into a multi-file package
+
+**Do before save games** — save files encode Python module paths; reorganize first so
+those paths are stable.
+
+Split `roguelike.py` into a proper package. Proposed structure:
+
+```
+roguelike/
+  __main__.py     # entry point: calls main()
+  constants.py    # MAP_W/H, COLOR_*, CORRUPTION_MAX, HAZARD_DATA, corruption msg pools
+  data.py         # ITEM_TEMPLATES, SHOP_STOCK, LORE_POOL, WIN_TERMINAL, SKILLS
+  entities.py     # Player, Item, Enemy, Site, Room, Terminal  (zero curses imports)
+  world.py        # dungeon gen, scatter_*, make_floor, FOV, A*, find_path  (zero curses)
+  ui.py           # all draw/show_* functions  (all curses usage lives here)
+  lore_gen.py     # unchanged
+```
+
+**Key discipline**: `entities.py` and `world.py` must have zero curses imports — they
+become pure logic and will port to pygame untouched. All curses usage stays in `ui.py`.
+
+Run command becomes `python3 -m roguelike`. Syntax check:
+`python3 -m py_compile roguelike/*.py && python3 -m py_compile roguelike/lore_gen.py`
+
+---
+
+### 11. Save games
+
+**Do after reorganization** — stable module paths prevent save-file breakage during
+future refactors.
+
+Use `pickle` for simplicity (local single-player game; no security concern). Save the
+full game state: `Player`, `[Site]`, `current_site_index`, `px`, `py`, `current_floor`.
+The `Site.floors` cache (tiles, enemies, items, explored, hazards) is the bulk of the
+data and pickles cleanly since it contains only stdlib types and our own classes.
+
+Save file: `~/.roguelike/save.pkl` (or `%APPDATA%/roguelike/save.pkl` on Windows).
+`S` key on the ship screen saves; game auto-saves on clean exit. On death the save is
+deleted (permadeath by default). Add a `Continue` option to the main menu when a save
+exists.
+
+---
+
+### 12. Windows executable
+
+**Do last** — pure packaging step, easiest when the codebase is otherwise stable.
+
+```
+pip install pyinstaller windows-curses
+pyinstaller --onefile --name "The Meridian" roguelike/__main__.py
+```
+
+`windows-curses` is a drop-in replacement that PyInstaller bundles automatically.
+Test the resulting `.exe` on a clean Windows machine (no Python installed) before
+shipping. A `.spec` file in the repo controls build options.
 
 ---
 
@@ -275,6 +331,8 @@ Game logic and rendering are deliberately kept separate:
   curses dependency and ports untouched
 - Only the rendering layer (`draw`, `draw_panel`, `show_*` screens) gets replaced with pygame
 - The game loop structure (`main` → `run_site`) stays identical
+- After reorganization (item 10) this separation is enforced structurally by module
+  boundaries: `entities.py` + `world.py` are curses-free by convention and lint rule
 
 ### Principles
 - Nail the systems first (character, combat, world gen, economy) before worrying about graphics
