@@ -10,7 +10,8 @@ python3 -m py_compile roguelike/constants.py roguelike/entities.py roguelike/dat
 ```
 
 Sci-fi dungeon crawler. Player pilots *The Meridian* to named sites, explores procedurally
-generated floors, returns to ship between runs. No hard win condition.
+generated floors, returns to ship between runs. Win condition: defeat HADES-7 on Erebus fl. 10
+(ending sequence not yet built — boss kill currently just sets `site.cleared = True`).
 
 ---
 
@@ -18,12 +19,14 @@ generated floors, returns to ship between runs. No hard win condition.
 
 ```
 roguelike/
-  __main__.py     # Entry point: python3 -m roguelike; main() + curses.wrapper
+  __main__.py     # Entry point + save system: main(), SAVE_PATH, save_game(), load_game(),
+                  #   delete_save(), show_continue_screen(); curses.wrapper entry point
   constants.py    # All named constants and lookup tables; zero imports
   entities.py     # Data classes: Player, Item, Enemy, Site, Room, Terminal; zero curses
   data.py         # Static content: ITEM_TEMPLATES, SHOP_STOCK, LORE_POOL, WIN_TERMINAL
   world.py        # Pure logic: dungeon gen, scatter_*, make_floor, FOV, A*, apply_effect,
-                  #   tick_effects, make_sites; zero curses
+                  #   tick_effects, make_sites, _frontier_theme, _calyx_theme, _colony_theme;
+                  #   zero curses
   ui.py           # All curses code: draw, draw_panel, show_minimap, show_equipment_screen,
                   #   show_shop_screen, show_targeting, show_character_creation,
                   #   show_skill_levelup_modal, show_skills_screen, show_levelup_modal,
@@ -38,6 +41,8 @@ All curses usage lives in `ui.py` (rendering) and `game.py` (key codes only).
 
 `apply_effect` and `tick_effects` live in `world.py` so both `game.py` and `ui.py` can
 import them without a circular dependency.
+
+`show_continue_screen` lives in `__main__.py` (not `ui.py`) because it needs `SAVE_PATH`.
 
 ---
 
@@ -59,7 +64,18 @@ import them without a circular dependency.
 ### Data flow
 1. `make_floor(n, theme_fn, enemy_density, is_final, place_boss)` → floor state dict
 2. `Site.floors` dict caches visited floors; in-place mutation auto-persists
-3. Outer loop: `main()` → `show_character_creation()` → `show_ship_screen()` ↔ `show_nav_computer()` → `run_site()` → ship
+3. Outer loop: `main()` → check save → `show_continue_screen()` or `show_character_creation()`
+   → `show_ship_screen()` ↔ `show_nav_computer()` → `run_site()` → ship
+
+### Save system (`__main__.py`)
+- `SAVE_PATH` = `~/.roguelike/save.pkl` (Linux/Mac) or `%APPDATA%\.roguelike\save.pkl` (Windows)
+- Format: `pickle({'player': Player, 'sites': [Site, ...]})` — full game state in one dict
+- **Save** after `run_site` returns `'escaped'`; also on ship-screen quit (`Q`)
+- **Delete** after `run_site` returns `'dead'` or `'restart'`
+- `show_continue_screen` shows `[C] Continue / [N] New Game / [Q] Quit` with player name/level
+- Atomic write: write to `.tmp` then `Path.replace()` to avoid corruption on crash
+- **Pickle constraint**: `Site.theme_fn` must be a named module-level function — lambdas are
+  not picklable. Named theme fns: `_frontier_theme`, `_calyx_theme`, `_colony_theme` in `world.py`
 
 ### Core functions
 | Function | Module | Purpose |
@@ -82,7 +98,7 @@ import them without a circular dependency.
 | `show_run_summary(...)` | ui | post-death/restart recap screen |
 | `show_ship_screen(...)` | ui | hub: ship status, site list |
 | `show_nav_computer(...)` | ui | site selection; deducts fuel |
-| `main(stdscr)` | __main__ | outer coordinator |
+| `main(stdscr)` | __main__ | outer coordinator; save/load orchestration |
 
 ### Sites
 | Site | Floors | Fuel | Notes |
@@ -98,6 +114,8 @@ import them without a circular dependency.
 - **Backgrounds**: Soldier (Melee 1 + Tactics 1), Engineer (Engineering 1 + Electronics 1), Medic (Medicine 1 + Survival 1), Hacker (Hacking 1 + Cartography 1)
 - **Equipment slots** (6): weapon, armor, helmet, gloves, boots, tool
 - **Status effects**: poison, burn, stun, repair, stim
+- **Key attrs**: `player.level`, `player.name`, `player.fuel`, `player.credits`,
+  `player.skills` (dict), `player.active_effects` (dict), `player.equipment` (dict)
 
 ### Enemies
 | Name | Char | Behaviour | Special |
@@ -109,7 +127,7 @@ import them without a circular dependency.
 | Lurker | L | fast (2 moves) | — |
 | Brute | B | brute (cooldown) | stun on-hit |
 | Exploder | E | melee | AoE on death |
-| HADES-7 Remnant | H | melee | boss; kill clears Erebus |
+| HADES-7 Remnant | H | melee | boss; kill sets `site.cleared = True` |
 
 ### Items of note
 | Category | Items |
@@ -131,30 +149,60 @@ Terminal hacks reduce it by 30. Tiers: Whisper (25) → Interference (50) → Ca
 
 ## Conventions
 
-- **No external dependencies** — stdlib only (`curses`, `copy`, `random`, `heapq`, `collections`)
+- **No external dependencies** — stdlib only (`curses`, `copy`, `random`, `heapq`, `collections`,
+  `pickle`, `pathlib`, `os`, `sys`)
 - **Curses isolation** — `entities.py` and `world.py` import zero curses; all rendering in `ui.py`
 - **In-place mutation for persistence** — never replace `items_on_map` or `explored` with new
   objects on an active floor; mutate them so `Site.floors` cache stays live
 - **`curses.error` suppression** — all `addch`/`addstr` calls wrapped in `try/except curses.error`
 - **Floor geometry** — `stair_down = rooms[-1].center()`; `stair_up = rooms[0].center()`;
   floor 1 has `stair_up = None`; final floors have `stair_down = None`
-- **Theme inheritance** — `theme_fn` lambdas use `{**get_theme(n), ...}` to carry all required keys
+- **Theme functions** — `theme_fn` must be a named module-level function (not a lambda);
+  lambdas break `pickle`. Use `{**get_theme(n), ...}` pattern to inherit all required keys.
 
 ---
 
 ## Next Up
 
-### 1. Save games
-`pickle` the game state: `Player`, `[Site]`, position, current floor.
-Save to `~/.roguelike/save.pkl` (`%APPDATA%` on Windows). Auto-save on clean exit;
-delete on death. `Continue` option on main menu when save exists.
+### 1. In-game help screen (`?` key)
+Add `show_help_screen(stdscr)` to `ui.py`. Handle `?` in `run_site` (non-turn-consuming,
+like minimap). Display the controls table in a full-screen modal; `?` or Esc to close.
+No state changes needed — pure rendering.
 
-### 2. Windows executable
-`pip install pyinstaller windows-curses` then:
+### 2. High score table
+Store top 10 runs in `~/.roguelike/scores.json` (same dir as save). Record on
+death/restart/quit-after-visiting-a-site. Fields: `name, level, kills, floors, site, outcome, date`.
+Show from startup screen with a `[H] High Scores` option. Sort by `max_floor_reached` then `kills`.
+Add `record_score(player, site_name, outcome)` helper to `__main__.py` alongside save helpers.
+
+### 3. Difficulty setting at character creation
+Add a step to `show_character_creation` (after background, before point-buy). Choices:
+Easy / Normal / Hard. Store as `player.difficulty` (string). Apply multipliers in `run_site`
+when calling `make_floor`: Hard → `enemy_density *= 1.5`, starting fuel 2, credits 0;
+Easy → `enemy_density *= 0.7`, +10 max HP, starting credits 50. No changes to `make_floor`
+signature — adjust density on the `site` object or pass inline.
+
+### 4. Erebus ending sequence
+After HADES-7 is killed, `run_site` currently returns `'escaped'` with `site.cleared = True`.
+Add a `show_erebus_ending(stdscr, player)` in `ui.py`: final HADES-7 terminal message,
+escape sequence, win screen with run stats. `run_site` should return a new `'won'` result
+when the boss floor is cleared; `main()` handles `'won'` by calling the ending screen,
+deleting the save, then returning to startup (no new run offered automatically).
+
+---
+
+## Build
+
+```sh
+# Linux / Mac
+./build.sh
+
+# Windows
+build.bat
 ```
-pyinstaller --onefile --name "The Meridian" roguelike/__main__.py
-```
-Keep a `.spec` file in the repo. Test on a clean Windows machine (no Python).
+
+Both scripts run `pyinstaller --onefile --name "The Meridian" roguelike/__main__.py`.
+Windows additionally installs `windows-curses`. Output: `dist/The Meridian[.exe]`.
 
 ---
 

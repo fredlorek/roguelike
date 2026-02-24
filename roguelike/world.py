@@ -265,6 +265,21 @@ def make_floor(floor_num, theme_fn=None, enemy_density=1.0, is_final=False, plac
     }
 
 
+def _frontier_theme(f):
+    return {**get_theme(1), 'name': 'Frontier Town'}
+
+
+def _calyx_theme(f):
+    return {**get_theme(min(f, 3)),
+            'name': ['Cargo Hold', 'Crew Deck', 'Bridge', 'Reactor'][f - 1]}
+
+
+def _colony_theme(f):
+    return {**get_theme(min(f + 1, 9)),
+            'name': ['Surface', 'Sub-Level 1', 'Sub-Level 2',
+                     'Bunker', 'Lab', 'Core'][f - 1]}
+
+
 def make_sites():
     """Create a fresh list of Site objects for a new run."""
     return [
@@ -274,20 +289,16 @@ def make_sites():
         Site('Frontier Town',    'T', depth=1,  fuel_cost=1,
              desc='Rough settlement. Supplies available.',
              enemy_density=0.0,
-             theme_fn=lambda f: {**get_theme(1), 'name': 'Frontier Town'}),
+             theme_fn=_frontier_theme),
 
         Site('Wreck: ISC Calyx', 'W', depth=4,  fuel_cost=2,
              desc='Drifting hulk. Security drones still active.',
              enemy_density=1.4,
-             theme_fn=lambda f: {**get_theme(min(f, 3)),
-                                 'name': ['Cargo Hold', 'Crew Deck',
-                                          'Bridge', 'Reactor'][f - 1]}),
+             theme_fn=_calyx_theme),
 
         Site('Colony Ruin KE-7', 'C', depth=6,  fuel_cost=2,
              desc='Abandoned colony. Something moved in.',
-             theme_fn=lambda f: {**get_theme(min(f + 1, 9)),
-                                 'name': ['Surface', 'Sub-Level 1', 'Sub-Level 2',
-                                          'Bunker', 'Lab', 'Core'][f - 1]}),
+             theme_fn=_colony_theme),
     ]
 
 
