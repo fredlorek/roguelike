@@ -114,8 +114,10 @@ def main(stdscr):
             player = show_character_creation(stdscr)
             sites  = make_sites()
 
+        current_site = None   # where The Meridian is currently docked
+
         while True:   # inner loop: ship <-> site
-            action = show_ship_screen(stdscr, player, sites)
+            action = show_ship_screen(stdscr, player, sites, current_site)
 
             if action == 'quit':
                 save_game(player, sites)
@@ -123,12 +125,17 @@ def main(stdscr):
             if action == 'restart':
                 break   # break inner -> outer -> new character creation
 
-            # action == 'nav'
-            site = show_nav_computer(stdscr, player, sites)
-            if site is None:
-                continue   # player pressed Esc
+            if action == 'exit':
+                # Leave the ship at the current location — no fuel cost
+                site = current_site
+            else:
+                # action == 'nav': travel to a new location
+                site = show_nav_computer(stdscr, player, sites)
+                if site is None:
+                    continue   # player pressed Esc
+                player.fuel -= max(0, site.fuel_cost - player.fuel_discount)
+                current_site = site
 
-            player.fuel -= max(0, site.fuel_cost - player.fuel_discount)
             result = run_overland(stdscr, site, player)
 
             if result == 'back_to_ship':

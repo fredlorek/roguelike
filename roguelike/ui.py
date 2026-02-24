@@ -2054,36 +2054,45 @@ def show_win_screen(stdscr, player):
             return False
 
 
-def show_ship_screen(stdscr, player, sites):
-    """Hub screen showing ship status. Returns 'nav', 'restart', or 'quit'."""
+def show_ship_screen(stdscr, player, sites, current_site=None):
+    """Hub screen showing ship status.
+    Returns 'exit' (leave ship at current location), 'nav', 'restart', or 'quit'."""
     panel_attr  = curses.color_pair(COLOR_PANEL)
     header_attr = panel_attr | curses.A_BOLD
+    dim_attr    = curses.color_pair(COLOR_DARK) | curses.A_DIM
 
     while True:
         term_h, term_w = stdscr.getmaxyx()
         stdscr.erase()
 
         lines = [
-            ("THE MERIDIAN",                                    header_attr),
-            ("",                                                0),
-            (f"  Pilot: {player.name}",                        panel_attr),
+            ("THE MERIDIAN",                                          header_attr),
+            ("",                                                      0),
+            (f"  Pilot: {player.name}",                              panel_attr),
             (f"  {player.race} {player.char_class}  Lvl {player.level}", panel_attr),
-            ("",                                                0),
-            (f"  HP:    {player.hp} / {player.max_hp}",        panel_attr),
-            (f"  CR:    {player.credits}",                      panel_attr),
-            (f"  Fuel:  {player.fuel}",                         panel_attr),
-            ("",                                                0),
-            ("  Sites:",                                        header_attr),
+            ("",                                                      0),
+            (f"  HP:    {player.hp} / {player.max_hp}",              panel_attr),
+            (f"  CR:    {player.credits}",                            panel_attr),
+            (f"  Fuel:  {player.fuel}",                               panel_attr),
+            ("",                                                      0),
+            ("  Location:",                                           header_attr),
         ]
 
-        for site in sites:
-            status = "[cleared]" if site.cleared else "[available]"
-            lines.append((f"  [{site.char}] {site.name:<22} {status}", panel_attr))
+        if current_site:
+            status = " [cleared]" if current_site.cleared else ""
+            lines.append((f"  {current_site.name}{status}", panel_attr))
+            lines.append(("  " + current_site.desc[:40],   dim_attr))
+        else:
+            lines.append(("  In orbit — no destination set.", dim_attr))
 
         lines += [
-            ("",                                                0),
-            ("  [N] Navigation Computer",                      panel_attr),
-            ("  [R] New run   [Q] Quit",                       panel_attr),
+            ("",                                                      0),
+        ]
+        if current_site:
+            lines.append(("  [X] Exit Ship",                         panel_attr))
+        lines += [
+            ("  [N] Navigation Computer",                            panel_attr),
+            ("  [R] New run   [Q] Quit",                             panel_attr),
         ]
 
         start_row = max(0, (term_h - len(lines)) // 2)
@@ -2097,6 +2106,8 @@ def show_ship_screen(stdscr, player, sites):
         stdscr.refresh()
         key = stdscr.getch()
 
+        if key in (ord('x'), ord('X')) and current_site:
+            return 'exit'
         if key in (ord('n'), ord('N')):
             return 'nav'
         if key in (ord('r'), ord('R')):
