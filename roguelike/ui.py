@@ -37,6 +37,7 @@ def setup_colors():
     curses.init_pair(COLOR_HAZARD,       curses.COLOR_RED,     -1)
     curses.init_pair(COLOR_OV_OPEN,      curses.COLOR_GREEN,   -1)
     curses.init_pair(COLOR_OV_FOREST,    curses.COLOR_GREEN,   -1)
+    curses.init_pair(COLOR_OV_WATER,     curses.COLOR_BLUE,    -1)
 
 
 def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, floor_name=None, corruption=0):
@@ -2126,13 +2127,27 @@ def draw_overland(stdscr, overland, player_pos, site_name, player, log, visible)
     explored = overland['explored']
     ox, oy   = player_pos
 
-    # Tile colour map
+    # Build a position → POI lookup for overlay rendering
+    poi_map = {p['pos']: p for p in overland.get('pois', [])}
+
+    # Terrain tile → (char, attr) defaults
     tile_attrs = {
-        OV_OPEN:     curses.color_pair(COLOR_OV_OPEN),
-        OV_BLOCK:    curses.color_pair(COLOR_WALL)   | curses.A_BOLD,
-        OV_TREE:     curses.color_pair(COLOR_OV_FOREST) | curses.A_DIM,
-        OV_LANDING:  curses.color_pair(COLOR_TERMINAL)  | curses.A_BOLD,
-        OV_ENTRANCE: curses.color_pair(COLOR_STAIR)     | curses.A_BOLD,
+        '.':        curses.color_pair(COLOR_WALL)      | curses.A_DIM,
+        OV_OPEN:    curses.color_pair(COLOR_OV_OPEN),
+        OV_BLOCK:   curses.color_pair(COLOR_WALL)      | curses.A_BOLD,
+        OV_TREE:    curses.color_pair(COLOR_OV_FOREST) | curses.A_DIM,
+        OV_SHRUB:   curses.color_pair(COLOR_OV_FOREST) | curses.A_DIM,
+        OV_CRYSTAL: curses.color_pair(COLOR_PANEL)     | curses.A_DIM,
+        OV_SCRAP:   curses.color_pair(COLOR_WALL)      | curses.A_DIM,
+        OV_WATER:   curses.color_pair(COLOR_OV_WATER),
+        OV_LANDING: curses.color_pair(COLOR_TERMINAL)  | curses.A_BOLD,
+    }
+
+    # POI type → render attribute
+    poi_attrs = {
+        'dungeon':  curses.color_pair(COLOR_STAIR)    | curses.A_BOLD,
+        'town':     curses.color_pair(COLOR_ITEM)     | curses.A_BOLD,
+        'facility': curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD,
     }
 
     for ty in range(min(MAP_H, h - LOG_LINES)):
@@ -2140,8 +2155,13 @@ def draw_overland(stdscr, overland, player_pos, site_name, player, log, visible)
             pos = (tx, ty)
             if pos not in explored:
                 continue
-            ch   = tiles[ty][tx]
-            attr = tile_attrs.get(ch, curses.color_pair(COLOR_FLOOR))
+            poi = poi_map.get(pos)
+            if poi:
+                ch   = poi['char']
+                attr = poi_attrs.get(poi['type'], curses.color_pair(COLOR_ITEM) | curses.A_BOLD)
+            else:
+                ch   = tiles[ty][tx]
+                attr = tile_attrs.get(ch, curses.color_pair(COLOR_OV_OPEN))
             if pos not in visible:
                 attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
             try:
@@ -2160,20 +2180,30 @@ def draw_overland(stdscr, overland, player_pos, site_name, player, log, visible)
     panel_col = w - PANEL_W
     p_attr    = curses.color_pair(COLOR_PANEL)
     hd_attr   = p_attr | curses.A_BOLD
+    dim_attr  = curses.color_pair(COLOR_DARK) | curses.A_DIM
     hp_attr   = (curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD
                  if player.hp <= player.max_hp // 4 else p_attr)
+
+    at_poi = poi_map.get(player_pos)
     panel_lines = [
-        ("SURFACE",                              hd_attr),
+        ("SURFACE",                                   hd_attr),
         (None, 0),
-        (site_name[:PANEL_W - 1],               p_attr),
+        (site_name[:PANEL_W - 1],                    p_attr),
         (None, 0),
+    ]
+    if at_poi:
+        panel_lines += [
+            (at_poi['label'][:PANEL_W - 1],          curses.color_pair(COLOR_TERMINAL) | curses.A_BOLD),
+            (f"[{at_poi['type']}]",                  dim_attr),
+            (None, 0),
+        ]
+    panel_lines += [
         (f"HP:  {player.hp:>3} / {player.max_hp:<3}", hp_attr),
-        (f"Cr:  {player.credits}",              p_attr),
-        (f"Fuel:{player.fuel}",                 p_attr),
+        (f"Cr:  {player.credits}",                   p_attr),
+        (f"Fuel:{player.fuel}",                      p_attr),
         (None, 0),
-        ("WASD: move",                          p_attr),
-        (">: enter dungeon",                    p_attr),
-        ("B: back to ship",                     p_attr),
+        ("WASD: move",                               p_attr),
+        (">: enter   B: ship",                       p_attr),
     ]
     for i, (text, attr) in enumerate(panel_lines):
         if text is None:

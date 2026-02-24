@@ -1,5 +1,6 @@
 """Dungeon generation, scatter functions, FOV, A*, effects — zero curses."""
 
+import collections
 import copy
 import heapq
 import random
@@ -302,112 +303,228 @@ def make_sites():
     ]
 
 
-def generate_overland(site_name):
-    """Generate a tile-based overland surface map for a site.
-    Returns dict with tiles, player_start, dungeon_entrance, explored."""
-    tiles = [[OV_OPEN] * MAP_W for _ in range(MAP_H)]
+# ── Supplementary POI theme functions (must be module-level for pickle) ───────
 
-    # Site-specific terrain counts
-    terrain = {
-        'Erebus Station':   {'blocks': 25, 'trees': 5},
-        'Wreck: ISC Calyx': {'blocks': 35, 'trees': 8},
-        'Colony Ruin KE-7': {'blocks': 20, 'trees': 25},
-        'Frontier Town':    {'blocks': 10, 'trees': 20},
-    }
-    cfg = terrain.get(site_name, {'blocks': 15, 'trees': 12})
+def _erebus_sensor_theme(f):
+    return {**get_theme(min(f + 2, 6)), 'name': f'Sensor Array L{f}'}
 
-    # Scatter rock clusters
-    block_seeds = random.randint(max(1, cfg['blocks'] // 5), cfg['blocks'] // 3 + 1)
-    blocks_placed = 0
-    for _ in range(block_seeds * 10):
-        if blocks_placed >= cfg['blocks']:
-            break
-        bx = random.randint(1, MAP_W - 2)
-        by = random.randint(1, MAP_H - 2)
-        size = random.randint(1, 3)
-        for dy in range(-size, size + 1):
-            for dx in range(-size, size + 1):
-                nx, ny = bx + dx, by + dy
-                if (0 < nx < MAP_W - 1 and 0 < ny < MAP_H - 1
-                        and tiles[ny][nx] == OV_OPEN
-                        and blocks_placed < cfg['blocks']):
-                    tiles[ny][nx] = OV_BLOCK
-                    blocks_placed += 1
 
-    # Scatter tree patches
-    trees_placed = 0
-    for _ in range(cfg['trees'] * 5):
-        if trees_placed >= cfg['trees']:
-            break
-        tx = random.randint(1, MAP_W - 2)
-        ty = random.randint(1, MAP_H - 2)
-        if tiles[ty][tx] == OV_OPEN:
-            size = random.randint(1, 2)
-            for dy in range(-size, size + 1):
-                for dx in range(-size, size + 1):
-                    nx, ny = tx + dx, ty + dy
-                    if (0 < nx < MAP_W - 1 and 0 < ny < MAP_H - 1
-                            and tiles[ny][nx] == OV_OPEN
-                            and trees_placed < cfg['trees']):
-                        tiles[ny][nx] = OV_TREE
-                        trees_placed += 1
+def _frontier_mine_theme(f):
+    names = ['Mine Entrance', 'Deep Vein']
+    return {**get_theme(1), 'name': names[min(f - 1, len(names) - 1)]}
 
-    # Place landing pad in top-left quadrant, keep 1-tile clearance border
-    lx = random.randint(3, 12)
-    ly = random.randint(3, 8)
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            cx, cy = lx + dx, ly + dy
-            if 0 <= cx < MAP_W and 0 <= cy < MAP_H:
-                tiles[cy][cx] = OV_OPEN
-    tiles[ly][lx] = OV_LANDING
 
-    # Place dungeon entrance in bottom-right quadrant
-    ex = random.randint(MAP_W - 15, MAP_W - 5)
-    ey = random.randint(MAP_H - 10, MAP_H - 4)
-    for dy in range(-1, 2):
-        for dx in range(-1, 2):
-            cx, cy = ex + dx, ey + dy
-            if 0 <= cx < MAP_W and 0 <= cy < MAP_H:
-                tiles[cy][cx] = OV_OPEN
-    tiles[ey][ex] = OV_ENTRANCE
+def _calyx_pods_theme(f):
+    return {**_calyx_theme(1), 'name': 'Emergency Bay'}
 
-    # BFS connectivity check: ensure landing→entrance reachable
-    from collections import deque
-    visited = set()
-    queue = deque([(lx, ly)])
-    visited.add((lx, ly))
+
+def _colony_bunker_theme(f):
+    names = ['Bunker Access', 'Lower Vault', 'Core Shelter']
+    return {**get_theme(min(f + 3, 9)), 'name': names[min(f - 1, len(names) - 1)]}
+
+
+# ── Per-site biome terrain configs ────────────────────────────────────────────
+
+_BIOME_CONFIGS = {
+    'Erebus Station': {
+        'ground': '.', 'impassable': OV_BLOCK, 'feature': OV_CRYSTAL,
+        'water': OV_WATER, 'n_impassable': 40, 'n_feature': 35, 'n_water': 18,
+    },
+    'Frontier Town': {
+        'ground': OV_OPEN, 'impassable': OV_BLOCK, 'feature': OV_SHRUB,
+        'water': None, 'n_impassable': 18, 'n_feature': 50, 'n_water': 0,
+    },
+    'Wreck: ISC Calyx': {
+        'ground': '.', 'impassable': OV_BLOCK, 'feature': OV_SCRAP,
+        'water': None, 'n_impassable': 55, 'n_feature': 25, 'n_water': 0,
+    },
+    'Colony Ruin KE-7': {
+        'ground': OV_OPEN, 'impassable': OV_BLOCK, 'feature': OV_TREE,
+        'water': OV_WATER, 'n_impassable': 22, 'n_feature': 60, 'n_water': 10,
+    },
+}
+_DEFAULT_BIOME = {
+    'ground': OV_OPEN, 'impassable': OV_BLOCK, 'feature': OV_TREE,
+    'water': None, 'n_impassable': 20, 'n_feature': 20, 'n_water': 0,
+}
+
+# ── Per-site POI specs (main POI is always first, is_main=True) ───────────────
+
+_POI_SPECS = {
+    'Erebus Station': [
+        {'label': 'Main Station',   'is_main': True,  'char': '>', 'type': 'dungeon'},
+        {'label': 'Sensor Array',   'is_main': False, 'char': '[', 'type': 'facility',
+         'depth': 2, 'enemy_density': 0.6, 'theme_fn': _erebus_sensor_theme,
+         'desc': 'Signal monitoring outpost.'},
+    ],
+    'Frontier Town': [
+        {'label': 'Settlement',     'is_main': True,  'char': '+', 'type': 'town'},
+        {'label': 'Abandoned Mine', 'is_main': False, 'char': '>', 'type': 'dungeon',
+         'depth': 2, 'enemy_density': 1.0, 'theme_fn': _frontier_mine_theme,
+         'desc': 'Old excavation. Something moved in.'},
+    ],
+    'Wreck: ISC Calyx': [
+        {'label': 'Main Wreck',     'is_main': True,  'char': '>', 'type': 'dungeon'},
+        {'label': 'Emergency Bay',  'is_main': False, 'char': '[', 'type': 'facility',
+         'depth': 1, 'enemy_density': 0.4, 'theme_fn': _calyx_pods_theme,
+         'desc': 'Sealed emergency compartment.'},
+    ],
+    'Colony Ruin KE-7': [
+        {'label': 'Colony Ruins',   'is_main': True,  'char': '>', 'type': 'dungeon'},
+        {'label': 'Bunker',         'is_main': False, 'char': '>', 'type': 'dungeon',
+         'depth': 3, 'enemy_density': 1.5, 'theme_fn': _colony_bunker_theme,
+         'desc': 'Military hardened shelter. Heavy resistance.'},
+    ],
+}
+
+# ── Overland terrain helpers ──────────────────────────────────────────────────
+
+def _grow_terrain(tiles, char, total, n_seeds=None):
+    """Grow terrain regions via random walk to create large sweeping features."""
+    if total <= 0:
+        return
+    if n_seeds is None:
+        n_seeds = max(2, total // 12)
+    per_seed = max(1, total // n_seeds)
+    for _ in range(n_seeds):
+        x = random.randint(2, MAP_W - 3)
+        y = random.randint(2, MAP_H - 3)
+        placed = 0
+        for _step in range(per_seed * 6):
+            if 1 <= x < MAP_W - 1 and 1 <= y < MAP_H - 1:
+                if tiles[y][x] != char:
+                    tiles[y][x] = char
+                    placed += 1
+                    if placed >= per_seed:
+                        break
+            dx, dy = random.choice([(0,1),(0,-1),(1,0),(-1,0),(1,1),(1,-1),(-1,1),(-1,-1)])
+            x = max(1, min(MAP_W - 2, x + dx))
+            y = max(1, min(MAP_H - 2, y + dy))
+
+
+def _clear_area(tiles, cx, cy, radius, fill):
+    """Clear a square of tiles around (cx, cy) to ensure open ground."""
+    for dy in range(-radius, radius + 1):
+        for dx in range(-radius, radius + 1):
+            nx, ny = cx + dx, cy + dy
+            if 0 <= nx < MAP_W and 0 <= ny < MAP_H:
+                tiles[ny][nx] = fill
+
+
+def _find_open_pos(tiles, x1, y1, x2, y2, avoid, min_dist=10):
+    """Return an open tile within the rectangle [x1,x2]×[y1,y2] that is at
+    least min_dist from every position in avoid."""
+    for _ in range(400):
+        x = random.randint(x1, x2)
+        y = random.randint(y1, y2)
+        if tiles[y][x] in OV_IMPASSABLE:
+            continue
+        if all(abs(x - ax) + abs(y - ay) >= min_dist for ax, ay in avoid):
+            return (x, y)
+    # Fallback: relax distance constraint
+    for _ in range(100):
+        x = random.randint(x1, x2)
+        y = random.randint(y1, y2)
+        if tiles[y][x] not in OV_IMPASSABLE:
+            return (x, y)
+    return ((x1 + x2) // 2, (y1 + y2) // 2)
+
+
+def _ensure_path(tiles, start, end, open_char):
+    """BFS connectivity check; carve a path if start→end is blocked."""
+    visited = {start}
+    queue = collections.deque([start])
     while queue:
         cx, cy = queue.popleft()
-        if (cx, cy) == (ex, ey):
-            break
+        if (cx, cy) == end:
+            return
         for ndx, ndy in ((0, -1), (0, 1), (-1, 0), (1, 0)):
             nx, ny = cx + ndx, cy + ndy
+            npos = (nx, ny)
             if (0 <= nx < MAP_W and 0 <= ny < MAP_H
-                    and (nx, ny) not in visited
-                    and tiles[ny][nx] != OV_BLOCK):
-                visited.add((nx, ny))
-                queue.append((nx, ny))
-    else:
-        # Entrance not reached — carve a path (diagonal then straight)
-        cx, cy = lx, ly
-        while cx != ex or cy != ey:
-            if cx < ex:
-                cx += 1
-            elif cx > ex:
-                cx -= 1
-            if cy < ey:
-                cy += 1
-            elif cy > ey:
-                cy -= 1
-            if tiles[cy][cx] == OV_BLOCK:
-                tiles[cy][cx] = OV_OPEN
+                    and npos not in visited
+                    and tiles[ny][nx] not in OV_IMPASSABLE):
+                visited.add(npos)
+                queue.append(npos)
+    # Not connected — carve diagonal-then-straight corridor
+    cx, cy = start
+    ex, ey = end
+    while cx != ex or cy != ey:
+        if cx < ex:   cx += 1
+        elif cx > ex: cx -= 1
+        if cy < ey:   cy += 1
+        elif cy > ey: cy -= 1
+        if tiles[cy][cx] in OV_IMPASSABLE:
+            tiles[cy][cx] = open_char
+
+
+# ── Overland map generation ───────────────────────────────────────────────────
+
+def generate_overland(site_name):
+    """Generate a planet-surface overland map with biome terrain and multiple POIs.
+    Returns dict: tiles, player_start, pois, explored."""
+    biome = _BIOME_CONFIGS.get(site_name, _DEFAULT_BIOME)
+
+    # Fill with base ground, then grow terrain regions
+    tiles = [[biome['ground']] * MAP_W for _ in range(MAP_H)]
+    _grow_terrain(tiles, biome['impassable'], biome['n_impassable'])
+    if biome.get('feature') and biome.get('n_feature', 0) > 0:
+        _grow_terrain(tiles, biome['feature'], biome['n_feature'])
+    if biome.get('water') and biome.get('n_water', 0) > 0:
+        _grow_terrain(tiles, biome['water'], biome['n_water'],
+                      n_seeds=max(1, biome['n_water'] // 20))
+
+    # Place landing pad (top-left area) with clearance
+    lx = random.randint(3, 12)
+    ly = random.randint(3, 8)
+    _clear_area(tiles, lx, ly, 2, biome['ground'])
+    tiles[ly][lx] = OV_LANDING
+
+    # Place POIs: main in bottom-right, supplementary in centre/other quadrants
+    poi_specs = _POI_SPECS.get(site_name, [])
+    quadrants = [
+        (MAP_W // 2, MAP_H // 2, MAP_W - 5, MAP_H - 4),      # bottom-right: main
+        (MAP_W // 4, MAP_H // 4, 3 * MAP_W // 4, 3 * MAP_H // 4),  # centre: secondary
+        (5, MAP_H // 2, MAP_W // 2, MAP_H - 4),               # bottom-left: tertiary
+    ]
+    avoid = [(lx, ly)]
+    pois = []
+
+    for i, spec in enumerate(poi_specs):
+        x1, y1, x2, y2 = quadrants[min(i, len(quadrants) - 1)]
+        pos = _find_open_pos(tiles, x1, y1, x2, y2, avoid, min_dist=12)
+        px, py = pos
+        _clear_area(tiles, px, py, 1, biome['ground'])
+        avoid.append(pos)
+
+        poi = {
+            'pos':     pos,
+            'char':    spec['char'],
+            'type':    spec['type'],
+            'label':   spec['label'],
+            'is_main': spec.get('is_main', False),
+        }
+        if not spec.get('is_main'):
+            poi['site'] = Site(
+                name=spec['label'],
+                char=spec['char'],
+                depth=spec['depth'],
+                desc=spec.get('desc', ''),
+                fuel_cost=0,
+                enemy_density=spec.get('enemy_density', 1.0),
+                theme_fn=spec.get('theme_fn'),
+            )
+        pois.append(poi)
+
+    # Ensure every POI is reachable from the landing pad
+    for poi in pois:
+        _ensure_path(tiles, (lx, ly), poi['pos'], biome['ground'])
 
     return {
-        'tiles':            tiles,
-        'player_start':     (lx, ly),
-        'dungeon_entrance': (ex, ey),
-        'explored':         set(),
+        'tiles':        tiles,
+        'player_start': (lx, ly),
+        'pois':         pois,
+        'explored':     set(),
     }
 
 

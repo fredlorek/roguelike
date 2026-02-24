@@ -1019,11 +1019,11 @@ def run_site(stdscr, site, player):
 def run_overland(stdscr, site, player):
     """Run the overland surface exploration loop for a site.
     Returns 'back_to_ship', 'dead', or 'restart'."""
-    if not site.overland:
+    # Regenerate if missing or from an old save without 'pois'
+    if not site.overland or 'pois' not in site.overland:
         site.overland = generate_overland(site.name)
     overland = site.overland
     ox, oy   = overland['player_start']
-    entrance = overland['dungeon_entrance']
     landing  = overland['player_start']
 
     log = collections.deque([''] * LOG_LINES, maxlen=LOG_LINES)
@@ -1047,27 +1047,31 @@ def run_overland(stdscr, site, player):
 
         key = stdscr.getch()
 
+        # Find POI at current position (None if not standing on one)
+        at_poi = next((p for p in overland['pois'] if p['pos'] == (ox, oy)), None)
+
         if key in MOVE_KEYS_OV:
             dx, dy = MOVE_KEYS_OV[key]
             nx, ny = ox + dx, oy + dy
             if (0 <= nx < MAP_W and 0 <= ny < MAP_H
                     and overland['tiles'][ny][nx] not in OV_IMPASSABLE):
                 ox, oy = nx, ny
-                tile = overland['tiles'][oy][ox]
-                if (ox, oy) == entrance:
-                    log.appendleft("Dungeon entrance. Press > to enter.")
+                stepped_poi = next((p for p in overland['pois'] if p['pos'] == (ox, oy)), None)
+                if stepped_poi:
+                    log.appendleft(f"{stepped_poi['label']} — press > to enter.")
                 elif (ox, oy) == landing:
                     log.appendleft("Landing pad. Press B to return to ship.")
 
         elif key == ord('>'):
-            if (ox, oy) == entrance:
-                result = run_site(stdscr, site, player)
-                ox, oy = entrance
+            if at_poi:
+                poi_site = site if at_poi['is_main'] else at_poi['site']
+                result = run_site(stdscr, poi_site, player)
+                ox, oy = at_poi['pos']
                 if result in ('dead', 'restart'):
                     return result
                 log.appendleft("You return to the surface.")
             else:
-                log.appendleft("No dungeon entrance here.")
+                log.appendleft("Nothing to enter here.")
 
         elif key in (ord('b'), ord('B')):
             if (ox, oy) == landing:

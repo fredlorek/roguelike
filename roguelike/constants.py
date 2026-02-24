@@ -75,14 +75,19 @@ COLOR_ENEMY_EXPL   = 19 # magenta     — Exploder
 COLOR_HAZARD       = 20 # red         — danger tiles
 COLOR_OV_OPEN      = 21 # green       — overland open ground
 COLOR_OV_FOREST    = 22 # dim green   — overland vegetation
+COLOR_OV_WATER     = 23 # blue        — overland liquid / chasm
 
 # Overland map tile chars
-OV_OPEN     = ','   # passable open ground
-OV_BLOCK    = '#'   # impassable obstacle
-OV_TREE     = 'T'   # passable vegetation
+OV_OPEN     = ','   # passable open / sandy ground
+OV_BLOCK    = '#'   # impassable obstacle (rock, debris, ice wall)
+OV_TREE     = 'T'   # passable vegetation / overgrowth
+OV_SHRUB    = '"'   # passable scrub brush / low growth
+OV_CRYSTAL  = ':'   # passable ice / mineral formation
+OV_SCRAP    = '%'   # passable loose scrap / debris metal
+OV_WATER    = '~'   # impassable liquid / chasm
 OV_LANDING  = '*'   # landing pad (arrival point)
-OV_ENTRANCE = '>'   # dungeon entrance
-OV_IMPASSABLE = {OV_BLOCK}
+OV_ENTRANCE = '>'   # (legacy; POI chars now stored per-POI in overland dict)
+OV_IMPASSABLE = {OV_BLOCK, OV_WATER}
 
 # Signal corruption (Erebus Station floors 7-10)
 CORRUPTION_MAX = 100
