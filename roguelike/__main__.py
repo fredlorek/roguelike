@@ -148,5 +148,17 @@ def main(stdscr):
             # result == 'back_to_ship': loop back to ship screen
 
 
+def _prepare_terminal():
+    """Size the console (Windows) and clear scrollback (POSIX) before curses starts."""
+    if sys.platform == 'win32':
+        # Resize the cmd window to fit the game (100 cols × 44 rows minimum)
+        os.system('mode con: cols=105 lines=50')
+    else:
+        # Clear visible screen + scrollback so the prompt history is gone
+        sys.stdout.write('\033[2J\033[3J\033[H')
+        sys.stdout.flush()
+
+
 if __name__ == '__main__':
+    _prepare_terminal()
     curses.wrapper(main)
