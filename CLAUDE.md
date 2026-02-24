@@ -3,12 +3,41 @@
 ## Quick Start
 
 ```
-python3 roguelike.py
-python3 -m py_compile roguelike.py && python3 -m py_compile lore_gen.py
+python3 -m roguelike
+python3 -m py_compile roguelike/constants.py roguelike/entities.py roguelike/data.py \
+    roguelike/world.py roguelike/ui.py roguelike/game.py roguelike/__main__.py \
+    roguelike/lore_gen.py
 ```
 
 Sci-fi dungeon crawler. Player pilots *The Meridian* to named sites, explores procedurally
 generated floors, returns to ship between runs. No hard win condition.
+
+---
+
+## Package Structure
+
+```
+roguelike/
+  __main__.py     # Entry point: python3 -m roguelike; main() + curses.wrapper
+  constants.py    # All named constants and lookup tables; zero imports
+  entities.py     # Data classes: Player, Item, Enemy, Site, Room, Terminal; zero curses
+  data.py         # Static content: ITEM_TEMPLATES, SHOP_STOCK, LORE_POOL, WIN_TERMINAL
+  world.py        # Pure logic: dungeon gen, scatter_*, make_floor, FOV, A*, apply_effect,
+                  #   tick_effects, make_sites; zero curses
+  ui.py           # All curses code: draw, draw_panel, show_minimap, show_equipment_screen,
+                  #   show_shop_screen, show_targeting, show_character_creation,
+                  #   show_skill_levelup_modal, show_skills_screen, show_levelup_modal,
+                  #   show_run_summary, show_hacking_interface, show_cascade_modal,
+                  #   show_ship_screen, show_nav_computer
+  game.py         # Game loop: enemy_turn, run_site; all UI calls prefixed ui.*
+  lore_gen.py     # Procedural lore: word banks, generate_terminal; no curses
+```
+
+`entities.py` and `world.py` have zero curses imports — they are the pygame-portable core.
+All curses usage lives in `ui.py` (rendering) and `game.py` (key codes only).
+
+`apply_effect` and `tick_effects` live in `world.py` so both `game.py` and `ui.py` can
+import them without a circular dependency.
 
 ---
 
@@ -33,25 +62,27 @@ generated floors, returns to ship between runs. No hard win condition.
 3. Outer loop: `main()` → `show_character_creation()` → `show_ship_screen()` ↔ `show_nav_computer()` → `run_site()` → ship
 
 ### Core functions
-| Function | Purpose |
-|---|---|
-| `generate_dungeon()` | BSP room placement + corridor carving → `(tiles, rooms)` |
-| `make_floor(n, ...)` | dungeon gen + scatter; returns floor state dict |
-| `scatter_enemies / items / terminals / special_rooms / hazards` | populate a fresh floor |
-| `compute_fov(tiles, px, py, radius)` | Bresenham ray-cast → visible tile set |
-| `find_path(tiles, start, goal, blocked)` | A* for enemy AI |
-| `enemy_turn(...)` | move/attack all enemies; handles smoke, mines, AI behaviours |
-| `tick_effects(entity, label)` | advance status effects one turn → messages |
-| `draw(...)` | full redraw: map + panel + log; accepts `smoke_tiles`, `corruption` |
-| `draw_panel(...)` | right-side stats; shows tool, FX, signal bar |
-| `show_minimap(...)` | `M` key full-screen floor map; WASD to pan |
-| `run_site(stdscr, site, player)` | dungeon loop → `'escaped'`/`'dead'`/`'restart'` |
-| `show_ship_screen(...)` | hub: ship status, site list |
-| `show_nav_computer(...)` | site selection; deducts fuel |
-| `show_character_creation(stdscr)` | 6-step creation wizard → `Player` |
-| `show_hacking_interface(...)` | `H` key terminal modal → True if turn consumed |
-| `show_cascade_modal(stdscr, player)` | HADES-7 transmission at corruption peak |
-| `main(stdscr)` | outer coordinator |
+| Function | Module | Purpose |
+|---|---|---|
+| `generate_dungeon()` | world | BSP room placement + corridor carving → `(tiles, rooms)` |
+| `make_floor(n, ...)` | world | dungeon gen + scatter; returns floor state dict |
+| `scatter_enemies / items / terminals / special_rooms / hazards` | world | populate a fresh floor |
+| `compute_fov(tiles, px, py, radius)` | world | Bresenham ray-cast → visible tile set |
+| `find_path(tiles, start, goal, blocked)` | world | A* for enemy AI |
+| `apply_effect(entity, name, duration)` | world | add/extend a status effect |
+| `tick_effects(entity, label)` | world | advance status effects one turn → messages |
+| `enemy_turn(...)` | game | move/attack all enemies; handles smoke, mines, AI |
+| `run_site(stdscr, site, player)` | game | dungeon loop → `'escaped'`/`'dead'`/`'restart'` |
+| `draw(...)` | ui | full redraw: map + panel + log |
+| `draw_panel(...)` | ui | right-side stats; tool, FX, signal bar |
+| `show_minimap(...)` | ui | `M` key full-screen floor map; WASD to pan |
+| `show_hacking_interface(...)` | ui | `H` key terminal modal → True if turn consumed |
+| `show_cascade_modal(...)` | ui | HADES-7 transmission at corruption peak |
+| `show_character_creation(stdscr)` | ui | 6-step creation wizard → `Player` |
+| `show_run_summary(...)` | ui | post-death/restart recap screen |
+| `show_ship_screen(...)` | ui | hub: ship status, site list |
+| `show_nav_computer(...)` | ui | site selection; deducts fuel |
+| `main(stdscr)` | __main__ | outer coordinator |
 
 ### Sites
 | Site | Floors | Fuel | Notes |
@@ -101,8 +132,7 @@ Terminal hacks reduce it by 30. Tiers: Whisper (25) → Interference (50) → Ca
 ## Conventions
 
 - **No external dependencies** — stdlib only (`curses`, `copy`, `random`, `heapq`, `collections`)
-- **Single file (transitioning)** — currently `roguelike.py` + `lore_gen.py`; next milestone
-  splits into a package (see Next Up). New code should keep curses out of logic functions.
+- **Curses isolation** — `entities.py` and `world.py` import zero curses; all rendering in `ui.py`
 - **In-place mutation for persistence** — never replace `items_on_map` or `explored` with new
   objects on an active floor; mutate them so `Site.floors` cache stays live
 - **`curses.error` suppression** — all `addch`/`addstr` calls wrapped in `try/except curses.error`
@@ -114,36 +144,13 @@ Terminal hacks reduce it by 30. Tiers: Whisper (25) → Interference (50) → Ca
 
 ## Next Up
 
-Planned order (each unblocks the next):
-
-### ~~1. Run summary screen~~ ✓ DONE
-`show_run_summary(stdscr, player, site_name, outcome)` replaces `show_game_over`. Shown on
-death and mid-run restart (R key). Tracks `player.enemies_killed`, `player.items_found`,
-`player.max_floor_reached`. Displays site, outcome, deepest floor, enemies killed, items
-collected, total XP, final level, credits. `[ R ] New run  [ Q ] Quit` at the bottom.
-
-### 2. Reorganize into a package
-Split `roguelike.py` into:
-```
-roguelike/
-  __main__.py   # entry: python3 -m roguelike
-  constants.py  # MAP_W/H, COLOR_*, HAZARD_DATA, corruption pools
-  data.py       # ITEM_TEMPLATES, SHOP_STOCK, LORE_POOL, WIN_TERMINAL, SKILLS
-  entities.py   # Player, Item, Enemy, Site, Room, Terminal  — zero curses
-  world.py      # dungeon gen, scatter_*, make_floor, FOV, A*  — zero curses
-  ui.py         # all draw/show_* functions  — all curses here
-  lore_gen.py   # unchanged
-```
-`entities.py` and `world.py` must import zero curses — they become the pygame-portable core.
-
-### 3. Save games
-After reorganization (module paths must be stable before serializing).
+### 1. Save games
 `pickle` the game state: `Player`, `[Site]`, position, current floor.
 Save to `~/.roguelike/save.pkl` (`%APPDATA%` on Windows). Auto-save on clean exit;
 delete on death. `Continue` option on main menu when save exists.
 
-### 4. Windows executable
-After codebase is stable. `pip install pyinstaller windows-curses` then:
+### 2. Windows executable
+`pip install pyinstaller windows-curses` then:
 ```
 pyinstaller --onefile --name "The Meridian" roguelike/__main__.py
 ```
