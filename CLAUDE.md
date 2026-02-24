@@ -78,7 +78,7 @@ condition — sites can be cleared but the universe keeps expanding.
 | Combat | Tactics | +2% dodge/lv |
 | Technical | Engineering | See traps (lv1), disarm adjacent trap with `E` (lv2) |
 | Technical | Hacking | `H` key interface: lv0 read, lv1 map fragment, lv2 disable units, lv3 unlock vault, lv4 alert protocol, lv5 remote access |
-| Technical | Electronics | Radar/drones (future item 3/4) |
+| Technical | Electronics | Signal Jammer at lv1 (active via `X` key); Radar/drones (future) |
 | Navigation | Pilot | -1 fuel cost per 2 levels |
 | Navigation | Cartography | +1 FOV radius per 2 levels |
 | Navigation | Survival | -1 turn off all status-effect durations/lv |
@@ -88,9 +88,9 @@ condition — sites can be cleared but the universe keeps expanding.
 
 - **Background skill bonuses** (pre-seeded at creation, non-removable): Soldier: Melee 1 + Tactics 1; Engineer: Engineering 1 + Electronics 1; Medic: Medicine 1 + Survival 1; Hacker: Hacking 1 + Cartography 1
 - `player.skill_points` — banked unspent SP; shown in panel; spent via K key
-- **Equipment slots** (5): weapon, armor, helmet, gloves, boots
+- **Equipment slots** (6): weapon, armor, helmet, gloves, boots, tool
 - **Resources**: HP, XP, credits, fuel
-- **Status effects**: poison, burn, stun — applied by enemies and grenades; ticked each turn
+- **Status effects**: poison, burn, stun, repair, stim — applied by enemies, items, and tools; ticked each turn
 
 ### Enemies
 | Name | Char | Behaviour | Special |
@@ -167,30 +167,33 @@ shows all unread terminals floor-wide.
 
 ---
 
-### 4. Tech gear and tool sets
+### ~~4. Tech gear and tool sets~~ ✓ DONE
 
-Add a `'tool'` equipment slot (sixth slot, key `K` to activate). Tools are single-use or
-limited-charge active items distinct from consumables:
-- **Bypass Kit** — disarms an adjacent trap without triggering it (Engineering gated)
-- **Signal Jammer** — stuns all Drones and Sentries in FOV for 2 turns (Electronics gated)
-- **Grapple Line** — move through one wall tile; one charge per floor (no skill gate)
-- **Repair Drone** — restores 15 HP over 3 turns (Engineering gated)
+`'tool'` equipment slot (sixth slot, `X` key to activate). Tools are limited-charge active
+items distinct from consumables:
+- **Bypass Kit** — disarms an adjacent trap without triggering it (Engineering 1 gated)
+- **Signal Jammer** — stuns all Drones and Sentries in FOV for 2 turns (Electronics 1 gated)
+- **Grapple Line** — move through one wall tile; one charge per floor (no skill gate); charge
+  resets on floor entry
+- **Repair Drone** — restores 15 HP over 3 turns via `repair` status effect (Engineering 1 gated)
 
-Tools appear in shops and armory rooms. This gives the Tech/Engineering investment a
-moment-to-moment expression beyond the ranged-ATK bonus.
+All appear in shops and armory rooms. `draw_panel()` shows tool name + charges; hint updated
+to `[I]Equip [K]Skills [X]Tool`.
 
 ---
 
-### 5. Consumable variety
+### ~~5. Consumable variety~~ ✓ DONE
 
-Add tactically distinct one-use items that broaden decision-making beyond "heal or fight":
-- **Smoke Grenade** — creates a `smoke` tile overlay blocking enemy LOS for 3 turns
-- **EMP Charge** — stuns all Drones and Sentries in FOV (overlaps with Signal Jammer but
-  is a consumable, not a tool; stackable and findable)
-- **Scanner Chip** — adds all floor tiles to `explored` (instant minimap)
-- **Stimpack** — doubles movement speed (two moves per turn) for 5 turns; adds stun
-  afterwards
-- **Proximity Mine** — places a triggered explosive on the current tile
+Tactically distinct one-use items added to `ITEM_TEMPLATES` and `SHOP_STOCK`:
+- **Smoke Grenade** — `%` tile overlay (radius 3, 3 turns); enemies in smoke do random walk
+- **EMP Charge** — stuns all Drones and Sentries in FOV (consumable version of Signal Jammer)
+- **Scanner Chip** — adds all non-wall floor tiles to `explored` (instant minimap)
+- **Stimpack** — `stim` status: 2 moves/turn for 5 turns; then stun 1t
+- **Proximity Mine** — places `prox_mine` hazard on current tile; 12 dmg to any enemy that
+  steps on it; one trigger; removed from map on detonation
+
+`smoke_tiles = {(x,y): turns}` dict local to `run_site()`; ticked after each enemy turn;
+passed to `enemy_turn()` and `draw()`.
 
 ---
 
@@ -274,6 +277,7 @@ Game logic and rendering are deliberately kept separate:
 | `H` | Hack terminal (on terminal tile) or remote-pick unread terminal (Hacking 5, off-tile) |
 | `E` | Disarm adjacent/current trap (Engineering 2+ required; costs a turn) |
 | `U` | Use first consumable (grenades auto-target nearest visible enemy) |
+| `X` | Activate equipped tool (Bypass Kit / Signal Jammer / Grapple Line / Repair Drone) |
 | `F` | Fire ranged weapon (opens targeting cursor; Tab cycles targets) |
 | `T` | Open shop (when standing in a Supply Depot) |
 | `R` | New run (new character creation) |

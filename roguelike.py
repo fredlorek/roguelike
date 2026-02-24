@@ -35,9 +35,10 @@ class Room:
 
 class Item:
     def __init__(self, name, slot, atk=0, dfn=0, char='!', consumable=False, heal=0, ranged=False,
-                 effect=None, effect_turns=0, fuel=0):
+                 effect=None, effect_turns=0, fuel=0,
+                 charges=0, max_charges=0, tool_effect=None, skill_req=None, skill_level=0):
         self.name         = name   # display name
-        self.slot         = slot   # 'weapon', 'armor', or 'use'
+        self.slot         = slot   # 'weapon', 'armor', 'use', or 'tool'
         self.atk          = atk
         self.dfn          = dfn
         self.char         = char   # glyph on map
@@ -47,8 +48,17 @@ class Item:
         self.effect       = effect
         self.effect_turns = effect_turns
         self.fuel         = fuel
+        self.charges      = charges      # remaining uses (tools)
+        self.max_charges  = max_charges  # starting charges
+        self.tool_effect  = tool_effect  # 'bypass'/'jammer'/'grapple'/'repair_drone'
+        self.skill_req    = skill_req    # skill key required to use
+        self.skill_level  = skill_level  # minimum level of that skill
 
     def stat_str(self):
+        if self.tool_effect:
+            req = (f" [{SKILLS[self.skill_req]['name']} {self.skill_level}]"
+                   if self.skill_req else "")
+            return f"[{self.charges}/{self.max_charges}]{req}"
         if self.consumable:
             if self.fuel:
                 return f'+{self.fuel} Fuel'
@@ -76,6 +86,8 @@ class Item:
             return f"Used {self.name}: no effects to clear."
         if self.effect in ('poison', 'burn', 'stun'):
             return f"Threw {self.name}."   # enemy targeting handled in main loop
+        if self.effect in ('emp', 'smoke', 'stim', 'prox_mine', 'scanner'):
+            return f"Used {self.name}."    # effect applied in run_site
         if self.heal:
             medicine   = getattr(player, 'skills', {}).get('medicine', 0)
             total_heal = self.heal + medicine * 2
@@ -147,6 +159,21 @@ ITEM_TEMPLATES = [
     Item('Nano-Antidote',  'use',    char='+', consumable=True, effect='antidote'),
     Item('Sensor Kit',     'use',    char='?', consumable=True, effect='scan'),
     Item('Fuel Cell',      'use',    char='%', consumable=True, fuel=1),
+    # New consumables
+    Item('Smoke Grenade',  'use', char='!', consumable=True, effect='smoke'),
+    Item('EMP Charge',     'use', char='!', consumable=True, effect='emp'),
+    Item('Scanner Chip',   'use', char='?', consumable=True, effect='scanner'),
+    Item('Stimpack',       'use', char='+', consumable=True, effect='stim'),
+    Item('Proximity Mine', 'use', char='*', consumable=True, effect='prox_mine'),
+    # Tools — active equipment slot
+    Item('Bypass Kit',    'tool', char='[', tool_effect='bypass',
+         charges=3, max_charges=3, skill_req='engineering', skill_level=1),
+    Item('Signal Jammer', 'tool', char='[', tool_effect='jammer',
+         charges=2, max_charges=2, skill_req='electronics', skill_level=1),
+    Item('Grapple Line',  'tool', char='[', tool_effect='grapple',
+         charges=1, max_charges=1),
+    Item('Repair Drone',  'tool', char='[', tool_effect='repair_drone',
+         charges=2, max_charges=2, skill_req='engineering', skill_level=1),
     # Helmets — defence
     Item('Tactical Visor', 'helmet', dfn=1, char='^'),
     Item('Combat Helm',    'helmet', dfn=2, char='^'),
@@ -182,6 +209,21 @@ SHOP_STOCK = [
     (Item('Nano-Inject',     'use',    char='+', consumable=True, heal=15), 18),
     (Item('Medkit',          'use',    char='+', consumable=True, heal=25), 25),
     (Item('Sensor Kit',      'use',    char='?', consumable=True, effect='scan'), 20),
+    # New consumables
+    (Item('Smoke Grenade',  'use', char='!', consumable=True, effect='smoke'),    25),
+    (Item('EMP Charge',     'use', char='!', consumable=True, effect='emp'),      35),
+    (Item('Scanner Chip',   'use', char='?', consumable=True, effect='scanner'),  30),
+    (Item('Stimpack',       'use', char='+', consumable=True, effect='stim'),     40),
+    (Item('Proximity Mine', 'use', char='*', consumable=True, effect='prox_mine'), 30),
+    # Tools
+    (Item('Bypass Kit',    'tool', char='[', tool_effect='bypass',
+          charges=3, max_charges=3, skill_req='engineering', skill_level=1),      45),
+    (Item('Signal Jammer', 'tool', char='[', tool_effect='jammer',
+          charges=2, max_charges=2, skill_req='electronics', skill_level=1),      60),
+    (Item('Grapple Line',  'tool', char='[', tool_effect='grapple',
+          charges=1, max_charges=1),                                               50),
+    (Item('Repair Drone',  'tool', char='[', tool_effect='repair_drone',
+          charges=2, max_charges=2, skill_req='engineering', skill_level=1),      55),
 ]
 
 LORE_POOL = [
@@ -499,9 +541,10 @@ CLASSES = {
 
 class Player:
     XP_PER_LEVEL = 100
-    SLOTS = ('weapon', 'armor', 'helmet', 'gloves', 'boots')
+    SLOTS = ('weapon', 'armor', 'helmet', 'gloves', 'boots', 'tool')
     SLOT_LABELS = {'weapon': 'Weapon', 'armor': 'Armor',
-                   'helmet': 'Helmet', 'gloves': 'Gloves', 'boots': 'Boots'}
+                   'helmet': 'Helmet', 'gloves': 'Gloves', 'boots': 'Boots',
+                   'tool':   'Tool'}
 
     def __init__(self, name='Unknown', race='Human', char_class='Soldier',
                  body=5, reflex=5, mind=5, tech=5, presence=5, skills=None):
@@ -1039,15 +1082,21 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
         (f"CR:   {player.credits}",                        panel_attr),
         (f"Fuel: {player.fuel}",                           panel_attr),
         (None, 0),                                          # blank
-        ("[I] Equip  [K] Skills",                          panel_attr),
+        ("[I]Equip [K]Skills [X]Tool",                     panel_attr),
     ]
 
     if player.skill_points:
         lines.insert(-1, (f"SP:   {player.skill_points}",
                           curses.color_pair(COLOR_PLAYER) | curses.A_BOLD))
 
+    tool = player.equipment.get('tool')
+    if tool:
+        tool_text = f"Tool: {tool.name} [{tool.charges}/{tool.max_charges}]"
+        lines.insert(-1, (tool_text[:PANEL_W - 1], curses.color_pair(COLOR_ITEM)))
+
     if player.active_effects:
-        abbr = {'poison': 'Psn', 'burn': 'Brn', 'stun': 'Stn'}
+        abbr = {'poison': 'Psn', 'burn': 'Brn', 'stun': 'Stn',
+                'repair': 'Rep', 'stim': 'Stm'}
         parts = [f"{abbr.get(e, e)}({t}t)" for e, t in player.active_effects.items()]
         fx_text = ("FX: " + " ".join(parts))[:PANEL_W - 1]
         lines.insert(14, (fx_text, curses.color_pair(COLOR_HP_LOW) | curses.A_BOLD))
@@ -1072,7 +1121,7 @@ def draw_panel(stdscr, player, col, rows, current_floor, max_floor=MAX_FLOOR, fl
 def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
          stair_up, stair_down, current_floor, enemies=None, log=None,
          terminals=None, target_line=None, target_pos=None, special_rooms=None,
-         max_floor=MAX_FLOOR, theme_override=None, hazards=None):
+         max_floor=MAX_FLOOR, theme_override=None, hazards=None, smoke_tiles=None):
     term_h, term_w = stdscr.getmaxyx()
     view_h  = term_h - (LOG_LINES + 1)   # reserve log rows + divider
     map_w   = term_w - PANEL_W - 1   # columns available for the map
@@ -1145,6 +1194,9 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                         attr = (curses.color_pair(COLOR_SPECIAL) | curses.A_DIM
                                 if (mx, my) in special_tile_set
                                 else curses.color_pair(COLOR_FLOOR) | curses.A_DIM)
+                elif smoke_tiles and (mx, my) in smoke_tiles:
+                    ch   = '%'
+                    attr = curses.color_pair(COLOR_DARK) | curses.A_DIM
                 else:
                     ch   = FLOOR
                     if (mx, my) in special_tile_set:
@@ -1197,7 +1249,7 @@ def draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
                max_floor=max_floor, floor_name=theme['name'])
 
     # --- Message log ---
-    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  H:hack  E:disarm  U:use  R:reset  Q:quit"
+    HINT = " WASD/Arrows:move  F:fire  T:trade  >/< stairs  B:back  I:equip  K:skills  H:hack  E:disarm  U:use  X:tool  R:reset  Q:quit"
     divider_row = term_h - LOG_LINES - 1
     log_entries = list(log) if log else []   # index 0 = newest
 
@@ -1747,7 +1799,8 @@ def show_terminal(stdscr, terminal):
 
 def show_targeting(stdscr, tiles, px, py, player, visible, explored,
                    items_on_map, stair_up, stair_down, current_floor,
-                   enemies_on_map, log, terminals_on_map=None, hazards_on_map=None):
+                   enemies_on_map, log, terminals_on_map=None, hazards_on_map=None,
+                   smoke_tiles=None):
     """Targeting cursor for ranged attack.
     Tab cycles targets. Enter fires. Esc/F cancels.
     Returns (target_pos, enemy) or (None, None)."""
@@ -1782,7 +1835,7 @@ def show_targeting(stdscr, tiles, px, py, player, visible, explored,
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, hint_log,
              terminals=terminals_on_map, target_line=line_tiles, target_pos=target_pos,
-             hazards=hazards_on_map)
+             hazards=hazards_on_map, smoke_tiles=smoke_tiles)
 
         key = stdscr.getch()
 
@@ -2102,12 +2155,23 @@ def tick_effects(entity, label):
             dmg = EFFECT_DAMAGE[effect]
             entity.hp -= dmg
             msgs.append(f"{label} takes {dmg} {effect} damage!")
+        elif effect == 'repair':
+            if hasattr(entity, 'max_hp') and entity.hp < entity.max_hp:
+                heal = min(5, entity.max_hp - entity.hp)
+                entity.hp += heal
+                msgs.append(f"Repair Drone: +{heal} HP.")
         entity.active_effects[effect] = turns - 1
         if turns - 1 <= 0:
             expired.append(effect)
     for e in expired:
         del entity.active_effects[e]
-        msgs.append(f"{label} is no longer affected by {e}.")
+        if e == 'stim':
+            apply_effect(entity, 'stun', 1)
+            msgs.append(f"{label}: stimpack crash — stunned!")
+        elif e == 'repair':
+            pass   # no expiry message for repair drone
+        else:
+            msgs.append(f"{label} is no longer affected by {e}.")
     return msgs
 
 
@@ -2419,7 +2483,8 @@ def show_levelup_modal(stdscr, player):
             break
 
 
-def enemy_turn(enemies, tiles, px, py, visible, player):
+def enemy_turn(enemies, tiles, px, py, visible, player,
+               smoke_tiles=None, hazards_on_map=None):
     """Move and attack with every enemy. Returns list of combat message strings."""
     msgs       = []
     player_pos = (px, py)
@@ -2428,6 +2493,30 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
     occupied = set(enemies.keys())
 
     intimidate_chance = max(0, (player.presence - 5) * 3 + player.skills.get('intimidation', 0) * 3)
+    player_in_smoke   = bool(smoke_tiles and (px, py) in smoke_tiles)
+
+    def _check_mine(enemy):
+        """Check if enemy is on a player-placed mine. Trigger it. Returns True if killed."""
+        if not hazards_on_map:
+            return False
+        cur = next((p for p, e in enemies.items() if e is enemy), None)
+        if cur is None or cur not in hazards_on_map:
+            return False
+        h = hazards_on_map[cur]
+        if not h.get('placed_by_player'):
+            return False
+        dmg = 12
+        enemy.hp -= dmg
+        h['triggers_left'] -= 1
+        if h['triggers_left'] <= 0:
+            del hazards_on_map[cur]
+        msgs.append(f"BOOM! Mine hits {enemy.name} for {dmg}!")
+        if enemy.hp <= 0:
+            if cur in enemies:
+                del enemies[cur]
+            occupied.discard(cur)
+            return True
+        return False
 
     def _random_walk(enemy, epos):
         """Try to move enemy one step randomly. Updates enemies/occupied in place."""
@@ -2498,6 +2587,12 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
             if 'stun' in enemy.active_effects:
                 continue   # stunned enemy skips its turn
 
+        # Smoke: player is hidden — all enemies random walk
+        if player_in_smoke:
+            _random_walk(enemy, epos)
+            _check_mine(enemy)
+            continue
+
         behaviour = enemy.behaviour
 
         # ── Ranged (Gunner) ──────────────────────────────────────────────────
@@ -2540,6 +2635,7 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
                             msgs.append(f"{enemy.name}'s attack inflicts {effect}!")
             else:
                 _random_walk(enemy, epos)
+            _check_mine(enemy)
             continue
 
         # ── Fast (Lurker) ────────────────────────────────────────────────────
@@ -2556,6 +2652,7 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
                 else:
                     _random_walk(enemy, cur)
                     break
+            _check_mine(enemy)
             continue
 
         # ── Brute ────────────────────────────────────────────────────────────
@@ -2563,12 +2660,14 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
             if epos in visible:
                 if enemy.cooldown > 0:
                     enemy.cooldown -= 1
+                    _check_mine(enemy)
                     continue
                 # Act this turn, then set cooldown
                 enemy.cooldown = 1
                 _astar_step(enemy, epos)
             else:
                 _random_walk(enemy, epos)
+            _check_mine(enemy)
             continue
 
         # ── Exploder / Melee (default) ───────────────────────────────────────
@@ -2576,6 +2675,7 @@ def enemy_turn(enemies, tiles, px, py, visible, player):
             _astar_step(enemy, epos)
         else:
             _random_walk(enemy, epos)
+        _check_mine(enemy)
 
     return msgs
 
@@ -2975,6 +3075,8 @@ def run_site(stdscr, site, player):
     Returns 'escaped' (left via B), 'dead', or 'restart' (R pressed)."""
     current_floor = 1
 
+    smoke_tiles = {}   # {(x,y): turns_remaining} — player-deployed smoke
+
     def _load_floor(fnum):
         if fnum not in site.floors:
             is_final  = (fnum == site.depth)
@@ -2986,6 +3088,10 @@ def run_site(stdscr, site, player):
                 is_final=is_final,
                 place_boss=place_boss,
             )
+        # Reset per-floor Grapple Line charge when entering a new floor
+        grapple = player.equipment.get('tool')
+        if grapple and grapple.tool_effect == 'grapple' and grapple.charges < grapple.max_charges:
+            grapple.charges = grapple.max_charges
         return site.floors[fnum]
 
     floor_data       = _load_floor(current_floor)
@@ -3011,7 +3117,7 @@ def run_site(stdscr, site, player):
          stair_up, stair_down, current_floor, enemies_on_map, log,
          terminals=terminals_on_map, special_rooms=special_rooms,
          max_floor=site.depth, theme_override=current_theme,
-         hazards=hazards_on_map)
+         hazards=hazards_on_map, smoke_tiles=smoke_tiles)
 
     MOVE_KEYS = {
         ord('w'):         ( 0, -1),
@@ -3059,7 +3165,8 @@ def run_site(stdscr, site, player):
                 log.appendleft("You are stunned and cannot act!")
                 for msg in tick_effects(player, "You"):
                     log.appendleft(msg)
-                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                 for em in e_msgs:
                     log.appendleft(em)
             else:
@@ -3073,7 +3180,8 @@ def run_site(stdscr, site, player):
                     if consumed:
                         for msg in tick_effects(player, "You"):
                             log.appendleft(msg)
-                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                            smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                         for em in e_msgs:
                             log.appendleft(em)
                 elif hack_lv >= 5:
@@ -3171,7 +3279,8 @@ def run_site(stdscr, site, player):
                                 if consumed2:
                                     for msg in tick_effects(player, "You"):
                                         log.appendleft(msg)
-                                    e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                                    e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                                        smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                                     for em in e_msgs:
                                         log.appendleft(em)
                                 break
@@ -3185,7 +3294,8 @@ def run_site(stdscr, site, player):
                 log.appendleft("You are stunned and cannot act!")
                 for msg in tick_effects(player, "You"):
                     log.appendleft(msg)
-                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                 for em in e_msgs:
                     log.appendleft(em)
             else:
@@ -3202,13 +3312,107 @@ def run_site(stdscr, site, player):
                         log.appendleft(f"Engineering: {h['type']} trap disarmed.")
                         for msg in tick_effects(player, "You"):
                             log.appendleft(msg)
-                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                            smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                         for em in e_msgs:
                             log.appendleft(em)
                     else:
                         log.appendleft("No visible trap nearby to disarm.")
                 else:
                     log.appendleft("Engineering 2+ required to disarm traps.")
+
+        # ── X key: activate equipped tool ────────────────────────────────────
+        if key in (ord('x'), ord('X')):
+            tool = player.equipment.get('tool')
+            if not tool:
+                log.appendleft("No tool equipped. [I] to equip a tool.")
+            elif 'stun' in player.active_effects:
+                log.appendleft("You are stunned and cannot act!")
+                for msg in tick_effects(player, "You"):
+                    log.appendleft(msg)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
+                for em in e_msgs:
+                    log.appendleft(em)
+            elif tool.charges <= 0:
+                log.appendleft(f"{tool.name} is depleted.")
+            else:
+                if tool.skill_req and player.skills.get(tool.skill_req, 0) < tool.skill_level:
+                    log.appendleft(
+                        f"Requires {SKILLS[tool.skill_req]['name']} {tool.skill_level}.")
+                else:
+                    tool_used = False
+
+                    if tool.tool_effect == 'bypass':
+                        candidates = [(px + dx, py + dy)
+                                      for dx, dy in [(0, 0), (0, -1), (0, 1), (-1, 0), (1, 0)]]
+                        found_trap = [pos for pos in candidates if pos in hazards_on_map]
+                        if found_trap:
+                            tpos = found_trap[0]
+                            htype = hazards_on_map[tpos]['type']
+                            del hazards_on_map[tpos]
+                            log.appendleft(f"Bypass Kit: {htype} trap disarmed safely.")
+                            tool_used = True
+                        else:
+                            log.appendleft("Bypass Kit: no trap in range.")
+
+                    elif tool.tool_effect == 'jammer':
+                        count = sum(1 for pos, e in enemies_on_map.items()
+                                    if pos in visible and e.name in ('Drone', 'Sentry')
+                                    and not apply_effect(e, 'stun', 2))
+                        # apply_effect returns None, so count via loop
+                        count = 0
+                        for pos, e in enemies_on_map.items():
+                            if pos in visible and e.name in ('Drone', 'Sentry'):
+                                apply_effect(e, 'stun', 2)
+                                count += 1
+                        log.appendleft(f"Signal Jammer: {count} unit(s) disabled.")
+                        tool_used = True
+
+                    elif tool.tool_effect == 'grapple':
+                        log.appendleft("GRAPPLE — direction? (WASD/arrows)")
+                        draw(stdscr, tiles, px, py, player, visible, explored,
+                             items_on_map, stair_up, stair_down, current_floor,
+                             enemies_on_map, log, terminals=terminals_on_map,
+                             special_rooms=special_rooms, max_floor=site.depth,
+                             theme_override=current_theme, hazards=hazards_on_map,
+                             smoke_tiles=smoke_tiles)
+                        gk = stdscr.getch()
+                        dir_map = {
+                            ord('w'): (0, -1), ord('W'): (0, -1), curses.KEY_UP:    (0, -1),
+                            ord('s'): (0,  1), ord('S'): (0,  1), curses.KEY_DOWN:  (0,  1),
+                            ord('a'): (-1, 0), ord('A'): (-1, 0), curses.KEY_LEFT:  (-1, 0),
+                            ord('d'): (1,  0), ord('D'): (1,  0), curses.KEY_RIGHT: (1,  0),
+                        }
+                        if gk in dir_map:
+                            gdx, gdy = dir_map[gk]
+                            wx, wy   = px + gdx,     py + gdy
+                            lx2, ly2 = px + 2 * gdx, py + 2 * gdy
+                            if (0 <= wx < MAP_W and 0 <= wy < MAP_H
+                                    and tiles[wy][wx] == WALL
+                                    and 0 <= lx2 < MAP_W and 0 <= ly2 < MAP_H
+                                    and tiles[ly2][lx2] == FLOOR):
+                                px, py = lx2, ly2
+                                log.appendleft("Grapple Line: vaulted over wall!")
+                                tool_used = True
+                            else:
+                                log.appendleft("Can't grapple that way.")
+                        else:
+                            log.appendleft("Grapple cancelled.")
+
+                    elif tool.tool_effect == 'repair_drone':
+                        apply_effect(player, 'repair', 3)
+                        log.appendleft("Repair Drone deployed — restoring 15 HP over 3 turns.")
+                        tool_used = True
+
+                    if tool_used:
+                        tool.charges -= 1
+                        for msg in tick_effects(player, "You"):
+                            log.appendleft(msg)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                            smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
+                        for em in e_msgs:
+                            log.appendleft(em)
 
         if key in (ord('u'), ord('U')):
             consumables = [i for i in player.inventory if i.consumable]
@@ -3230,6 +3434,37 @@ def run_site(stdscr, site, player):
                     n = len(hazards_on_map)
                     log.appendleft(f"Used {item.name}: "
                                    f"{'%d hazard(s) marked.' % n if n else 'no hazards here.'}")
+                elif item.effect == 'emp':
+                    count = 0
+                    for pos, e in enemies_on_map.items():
+                        if pos in visible and e.name in ('Drone', 'Sentry'):
+                            apply_effect(e, 'stun', 2)
+                            count += 1
+                    log.appendleft(f"EMP Charge: {count} unit(s) disabled.")
+                elif item.effect == 'scanner':
+                    for sy2 in range(MAP_H):
+                        for sx2 in range(MAP_W):
+                            if tiles[sy2][sx2] == FLOOR:
+                                explored.add((sx2, sy2))
+                    log.appendleft("Scanner Chip activated — full floor mapped.")
+                elif item.effect == 'smoke':
+                    radius = 3
+                    for dy2 in range(-radius, radius + 1):
+                        for dx2 in range(-radius, radius + 1):
+                            if dx2 * dx2 + dy2 * dy2 <= radius * radius:
+                                tx2, ty2 = px + dx2, py + dy2
+                                if 0 <= tx2 < MAP_W and 0 <= ty2 < MAP_H:
+                                    smoke_tiles[(tx2, ty2)] = 3
+                    log.appendleft("Smoke grenade deployed.")
+                elif item.effect == 'stim':
+                    apply_effect(player, 'stim', 5)
+                    log.appendleft("Stimpack injected — speed doubled for 5 turns!")
+                elif item.effect == 'prox_mine':
+                    hazards_on_map[(px, py)] = {
+                        'type': 'prox_mine', 'char': '*',
+                        'triggers_left': 1, 'revealed': True, 'placed_by_player': True,
+                    }
+                    log.appendleft("Proximity mine placed.")
                 player.inventory.remove(item)
             else:
                 log.appendleft("No consumables in inventory.")
@@ -3251,7 +3486,8 @@ def run_site(stdscr, site, player):
                 log.appendleft("You are stunned and cannot fire!")
                 for msg in tick_effects(player, "You"):
                     log.appendleft(msg)
-                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                 for em in e_msgs:
                     log.appendleft(em)
             else:
@@ -3262,7 +3498,8 @@ def run_site(stdscr, site, player):
                     target_pos, _ = show_targeting(
                         stdscr, tiles, px, py, player, visible, explored,
                         items_on_map, stair_up, stair_down, current_floor,
-                        enemies_on_map, log, terminals_on_map, hazards_on_map)
+                        enemies_on_map, log, terminals_on_map, hazards_on_map,
+                        smoke_tiles=smoke_tiles)
                     if target_pos is not None:
                         tx, ty  = target_pos
                         hit_pos = None
@@ -3305,7 +3542,8 @@ def run_site(stdscr, site, player):
                                          items_on_map, stair_up, stair_down, current_floor,
                                          enemies_on_map, log, terminals=terminals_on_map,
                                          special_rooms=special_rooms, max_floor=site.depth,
-                                         theme_override=current_theme, hazards=hazards_on_map)
+                                         theme_override=current_theme, hazards=hazards_on_map,
+                                         smoke_tiles=smoke_tiles)
                                     show_terminal(stdscr, WIN_TERMINAL)
                                     site.cleared = True
                                     return 'escaped'
@@ -3314,7 +3552,8 @@ def run_site(stdscr, site, player):
                         else:
                             log.appendleft("The shot goes wide.")
 
-                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                        e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                            smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                         for em in e_msgs:
                             log.appendleft(em)
 
@@ -3323,173 +3562,213 @@ def run_site(stdscr, site, player):
                 log.appendleft("You are stunned and cannot act!")
                 for msg in tick_effects(player, "You"):
                     log.appendleft(msg)
-                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                 for em in e_msgs:
                     log.appendleft(em)
             else:
                 for msg in tick_effects(player, "You"):
                     log.appendleft(msg)
-                dx, dy = MOVE_KEYS[key]
-                nx, ny = px + dx, py + dy
-                if (nx, ny) in enemies_on_map:
-                    enemy = enemies_on_map[(nx, ny)]
-                    dmg = max(1, player.atk - enemy.dfn)
-                    enemy.hp -= dmg
-                    if enemy.hp <= 0:
-                        del enemies_on_map[(nx, ny)]
-                        if enemy.behaviour == 'exploder':
-                            splash = max(1, int(enemy.atk * 0.5))
-                            player.hp -= splash
-                            log.appendleft(f"{enemy.name} detonates — caught in blast! -{splash} HP!")
-                        n_lv, lvl_msg = player.gain_xp(enemy.xp_reward)
-                        cr_drop = max(1, enemy.xp_reward // 2)
-                        player.credits += cr_drop
-                        log.appendleft(
-                            f"You hit {enemy.name} for {dmg}. "
-                            f"{enemy.name} destroyed! +{enemy.xp_reward} XP +{cr_drop} cr")
-                        if lvl_msg:
-                            log.appendleft(lvl_msg)
-                        for _ in range(n_lv):
+
+                def _do_move(mk):
+                    """Process one movement key. Returns True if stairs were taken."""
+                    nonlocal px, py, current_floor, floor_data, tiles, items_on_map
+                    nonlocal enemies_on_map, terminals_on_map, special_rooms, stair_up
+                    nonlocal stair_down, explored, hazards_on_map, current_theme
+                    dx2, dy2 = MOVE_KEYS[mk]
+                    nx2, ny2 = px + dx2, py + dy2
+                    if (nx2, ny2) in enemies_on_map:
+                        en2 = enemies_on_map[(nx2, ny2)]
+                        dmg2 = max(1, player.atk - en2.dfn)
+                        en2.hp -= dmg2
+                        if en2.hp <= 0:
+                            del enemies_on_map[(nx2, ny2)]
+                            if en2.behaviour == 'exploder':
+                                splash2 = max(1, int(en2.atk * 0.5))
+                                player.hp -= splash2
+                                log.appendleft(f"{en2.name} detonates — caught in blast! -{splash2} HP!")
+                            n_lv2, lvl_msg2 = player.gain_xp(en2.xp_reward)
+                            cr2 = max(1, en2.xp_reward // 2)
+                            player.credits += cr2
+                            log.appendleft(
+                                f"You hit {en2.name} for {dmg2}. "
+                                f"{en2.name} destroyed! +{en2.xp_reward} XP +{cr2} cr")
+                            if lvl_msg2:
+                                log.appendleft(lvl_msg2)
+                            for _ in range(n_lv2):
+                                show_levelup_modal(stdscr, player)
+                                show_skill_levelup_modal(stdscr, player, points=2)
+                            if en2.boss:
+                                draw(stdscr, tiles, px, py, player, visible, explored,
+                                     items_on_map, stair_up, stair_down, current_floor,
+                                     enemies_on_map, log, terminals=terminals_on_map,
+                                     special_rooms=special_rooms, max_floor=site.depth,
+                                     theme_override=current_theme, hazards=hazards_on_map,
+                                     smoke_tiles=smoke_tiles)
+                                show_terminal(stdscr, WIN_TERMINAL)
+                                site.cleared = True
+                                return 'escaped'
+                        else:
+                            edm2 = max(1, en2.atk - player.dfn)
+                            player.hp -= edm2
+                            log.appendleft(
+                                f"You hit {en2.name} for {dmg2}. "
+                                f"{en2.name} hits back for {edm2}.")
+                    elif 0 <= nx2 < MAP_W and 0 <= ny2 < MAP_H and tiles[ny2][nx2] == FLOOR:
+                        px, py = nx2, ny2
+
+                        if (px, py) in hazards_on_map:
+                            hazard2 = hazards_on_map[(px, py)]
+                            hdata2  = HAZARD_DATA.get(hazard2['type'])
+                            if hdata2:
+                                if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
+                                    log.appendleft(f"You sense danger — sidestep the {hazard2['type']}!")
+                                else:
+                                    if hdata2['dmg']:
+                                        hdmg = hdata2['dmg'] + current_floor
+                                        player.hp -= hdmg
+                                        log.appendleft(f"{hazard2['type'].capitalize()} detonates! -{hdmg} HP!")
+                                    apply_effect(player, hdata2['effect'], hdata2['effect_turns'])
+                                    log.appendleft(
+                                        f"{hazard2['type'].capitalize()} — {hdata2['effect']} {hdata2['effect_turns']}t!")
+                                    hazard2['triggers_left'] -= 1
+                                    if hazard2['triggers_left'] <= 0:
+                                        del hazards_on_map[(px, py)]
+
+                        n_lv2, _ = player.gain_xp(1)
+                        for _ in range(n_lv2):
                             show_levelup_modal(stdscr, player)
                             show_skill_levelup_modal(stdscr, player, points=2)
-                        if enemy.boss:
-                            draw(stdscr, tiles, px, py, player, visible, explored,
-                                 items_on_map, stair_up, stair_down, current_floor,
-                                 enemies_on_map, log, terminals=terminals_on_map,
-                                 special_rooms=special_rooms, max_floor=site.depth,
-                                 theme_override=current_theme, hazards=hazards_on_map)
-                            show_terminal(stdscr, WIN_TERMINAL)
-                            site.cleared = True
-                            return 'escaped'
-                    else:
-                        edm = max(1, enemy.atk - player.dfn)
-                        player.hp -= edm
-                        log.appendleft(
-                            f"You hit {enemy.name} for {dmg}. "
-                            f"{enemy.name} hits back for {edm}.")
-                elif 0 <= nx < MAP_W and 0 <= ny < MAP_H and tiles[ny][nx] == FLOOR:
-                    px, py = nx, ny
+                        if (px, py) in items_on_map:
+                            picked2 = items_on_map[(px, py)]
+                            if player.pickup(picked2):
+                                items_on_map.pop((px, py))
+                                log.appendleft(f"Picked up {picked2.name}.")
+                            else:
+                                log.appendleft("Inventory full.")
 
-                    if (px, py) in hazards_on_map:
-                        hazard = hazards_on_map[(px, py)]
-                        hdata  = HAZARD_DATA[hazard['type']]
-                        if player.dodge_chance > 0 and random.randint(1, 100) <= player.dodge_chance:
-                            log.appendleft(f"You sense danger — sidestep the {hazard['type']}!")
-                        else:
-                            if hdata['dmg']:
-                                dmg = hdata['dmg'] + current_floor
-                                player.hp -= dmg
-                                log.appendleft(f"{hazard['type'].capitalize()} detonates! -{dmg} HP!")
-                            apply_effect(player, hdata['effect'], hdata['effect_turns'])
-                            log.appendleft(
-                                f"{hazard['type'].capitalize()} — {hdata['effect']} {hdata['effect_turns']}t!")
-                            hazard['triggers_left'] -= 1
-                            if hazard['triggers_left'] <= 0:
-                                del hazards_on_map[(px, py)]
+                        if (px, py) in terminals_on_map:
+                            t2 = terminals_on_map[(px, py)]
+                            if not t2.read:
+                                log.appendleft(f"Terminal — [H] to access: {t2.title[:38]}")
+                            else:
+                                log.appendleft(f"[offline] {t2.title[:44]}")
 
-                    n_lv, _ = player.gain_xp(1)
-                    for _ in range(n_lv):
-                        show_levelup_modal(stdscr, player)
-                        show_skill_levelup_modal(stdscr, player, points=2)
-                    if (px, py) in items_on_map:
-                        picked = items_on_map[(px, py)]
-                        if player.pickup(picked):
-                            items_on_map.pop((px, py))
-                            log.appendleft(f"Picked up {picked.name}.")
-                        else:
-                            log.appendleft("Inventory full.")
-
-                    if (px, py) in terminals_on_map:
-                        t = terminals_on_map[(px, py)]
-                        if not t.read:
-                            log.appendleft(f"Terminal — [H] to access: {t.title[:38]}")
-                        else:
-                            log.appendleft(f"[offline] {t.title[:44]}")
-
-                    for sroom in special_rooms.values():
-                        if (px, py) in sroom['tiles']:
-                            rtype = sroom['type']
-                            if not sroom['triggered']:
-                                sroom['triggered'] = True
-                                if rtype == 'shop':
-                                    log.appendleft("SUPPLY DEPOT — [T] to trade.")
-                                elif rtype == 'armory':
-                                    gear = [it for it in ITEM_TEMPLATES
-                                            if it.slot in ('weapon', 'armor', 'helmet', 'gloves', 'boots')]
-                                    avail = list(sroom['tiles'] - {(px, py)})
-                                    for pos in random.sample(avail, min(3, len(avail))):
-                                        items_on_map[pos] = copy.copy(random.choice(gear))
-                                    log.appendleft("ARMORY — Equipment available.")
-                                elif rtype == 'medbay':
-                                    player.hp = player.max_hp
-                                    heals = [it for it in ITEM_TEMPLATES if it.consumable]
-                                    avail = list(sroom['tiles'] - {(px, py)})
-                                    for pos in random.sample(avail, min(2, len(avail))):
-                                        items_on_map[pos] = copy.copy(random.choice(heals))
-                                    log.appendleft("MED BAY — HP restored. Supplies found.")
-                                elif rtype == 'terminal_hub':
-                                    hub_lore = (random.sample(LORE_POOL, 1) +
-                                                [generate_terminal(current_floor) for _ in range(2)])
-                                    avail    = list(sroom['tiles'] - {(px, py)})
-                                    for pos, (title, lines) in zip(
-                                            random.sample(avail, min(3, len(avail))), hub_lore):
-                                        terminals_on_map[pos] = Terminal(title, lines)
-                                    log.appendleft("TERMINAL HUB — Data nodes online.")
-                                elif rtype == 'vault':
-                                    cost = 50
-                                    if show_vault_prompt(stdscr, cost, player.credits):
-                                        if player.credits >= cost:
-                                            player.credits -= cost
-                                            rare  = [it for it in ITEM_TEMPLATES
-                                                     if it.atk >= 3 or it.dfn >= 3]
-                                            avail = list(sroom['tiles'] - {(px, py)})
-                                            for pos in random.sample(avail, min(4, len(avail))):
-                                                items_on_map[pos] = copy.copy(random.choice(rare))
-                                            log.appendleft("VAULT OPENED. Rare gear inside.")
+                        for sroom in special_rooms.values():
+                            if (px, py) in sroom['tiles']:
+                                rtype = sroom['type']
+                                if not sroom['triggered']:
+                                    sroom['triggered'] = True
+                                    if rtype == 'shop':
+                                        log.appendleft("SUPPLY DEPOT — [T] to trade.")
+                                    elif rtype == 'armory':
+                                        gear = [it for it in ITEM_TEMPLATES
+                                                if it.slot in ('weapon', 'armor', 'helmet',
+                                                               'gloves', 'boots', 'tool')]
+                                        avail = list(sroom['tiles'] - {(px, py)})
+                                        for pos in random.sample(avail, min(3, len(avail))):
+                                            items_on_map[pos] = copy.copy(random.choice(gear))
+                                        log.appendleft("ARMORY — Equipment available.")
+                                    elif rtype == 'medbay':
+                                        player.hp = player.max_hp
+                                        heals = [it for it in ITEM_TEMPLATES if it.consumable]
+                                        avail = list(sroom['tiles'] - {(px, py)})
+                                        for pos in random.sample(avail, min(2, len(avail))):
+                                            items_on_map[pos] = copy.copy(random.choice(heals))
+                                        log.appendleft("MED BAY — HP restored. Supplies found.")
+                                    elif rtype == 'terminal_hub':
+                                        hub_lore = (random.sample(LORE_POOL, 1) +
+                                                    [generate_terminal(current_floor) for _ in range(2)])
+                                        avail = list(sroom['tiles'] - {(px, py)})
+                                        for pos, (ttl, tlines) in zip(
+                                                random.sample(avail, min(3, len(avail))), hub_lore):
+                                            terminals_on_map[pos] = Terminal(ttl, tlines)
+                                        log.appendleft("TERMINAL HUB — Data nodes online.")
+                                    elif rtype == 'vault':
+                                        cost = 50
+                                        if show_vault_prompt(stdscr, cost, player.credits):
+                                            if player.credits >= cost:
+                                                player.credits -= cost
+                                                rare = [it for it in ITEM_TEMPLATES
+                                                        if it.atk >= 3 or it.dfn >= 3]
+                                                avail = list(sroom['tiles'] - {(px, py)})
+                                                for pos in random.sample(avail, min(4, len(avail))):
+                                                    items_on_map[pos] = copy.copy(random.choice(rare))
+                                                log.appendleft("VAULT OPENED. Rare gear inside.")
+                                            else:
+                                                sroom['triggered'] = False
+                                                log.appendleft("Insufficient credits.")
                                         else:
                                             sroom['triggered'] = False
-                                            log.appendleft("Insufficient credits.")
-                                    else:
-                                        sroom['triggered'] = False
-                            break
+                                break
 
-                    if stair_down and (px, py) == stair_down:
-                        current_floor += 1
-                        floor_data       = _load_floor(current_floor)
-                        tiles            = floor_data['tiles']
-                        px, py           = floor_data['start']
-                        items_on_map     = floor_data['items']
-                        enemies_on_map   = floor_data['enemies']
-                        terminals_on_map = floor_data['terminals']
-                        special_rooms    = floor_data.get('special_rooms', {})
-                        stair_up         = floor_data['stair_up']
-                        stair_down       = floor_data['stair_down']
-                        explored         = floor_data['explored']
-                        hazards_on_map   = floor_data.get('hazards', {})
-                        current_theme    = theme_fn(current_floor)
-                        arrival = current_theme.get('msg')
-                        log.appendleft(f"You descend to floor {current_floor}.")
-                        if arrival:
-                            log.appendleft(arrival)
-                    elif stair_up and (px, py) == stair_up:
-                        current_floor -= 1
-                        floor_data       = site.floors[current_floor]
-                        tiles            = floor_data['tiles']
-                        px, py           = floor_data['stair_down']
-                        items_on_map     = floor_data['items']
-                        enemies_on_map   = floor_data['enemies']
-                        terminals_on_map = floor_data['terminals']
-                        special_rooms    = floor_data.get('special_rooms', {})
-                        stair_up         = floor_data['stair_up']
-                        stair_down       = floor_data['stair_down']
-                        explored         = floor_data['explored']
-                        hazards_on_map   = floor_data.get('hazards', {})
-                        current_theme    = theme_fn(current_floor)
-                        log.appendleft(f"You ascend to floor {current_floor}.")
+                        if stair_down and (px, py) == stair_down:
+                            current_floor += 1
+                            floor_data       = _load_floor(current_floor)
+                            tiles            = floor_data['tiles']
+                            px, py           = floor_data['start']
+                            items_on_map     = floor_data['items']
+                            enemies_on_map   = floor_data['enemies']
+                            terminals_on_map = floor_data['terminals']
+                            special_rooms    = floor_data.get('special_rooms', {})
+                            stair_up         = floor_data['stair_up']
+                            stair_down       = floor_data['stair_down']
+                            explored         = floor_data['explored']
+                            hazards_on_map   = floor_data.get('hazards', {})
+                            current_theme    = theme_fn(current_floor)
+                            arrival = current_theme.get('msg')
+                            log.appendleft(f"You descend to floor {current_floor}.")
+                            if arrival:
+                                log.appendleft(arrival)
+                            return 'stairs'
+                        elif stair_up and (px, py) == stair_up:
+                            current_floor -= 1
+                            floor_data       = site.floors[current_floor]
+                            tiles            = floor_data['tiles']
+                            px, py           = floor_data['stair_down']
+                            items_on_map     = floor_data['items']
+                            enemies_on_map   = floor_data['enemies']
+                            terminals_on_map = floor_data['terminals']
+                            special_rooms    = floor_data.get('special_rooms', {})
+                            stair_up         = floor_data['stair_up']
+                            stair_down       = floor_data['stair_down']
+                            explored         = floor_data['explored']
+                            hazards_on_map   = floor_data.get('hazards', {})
+                            current_theme    = theme_fn(current_floor)
+                            log.appendleft(f"You ascend to floor {current_floor}.")
+                            return 'stairs'
+                    return None   # normal move (no stairs, no boss kill)
 
-                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player)
+                move_result = _do_move(key)
+                if move_result == 'escaped':
+                    return 'escaped'
+
+                # Stim: bonus move on same floor
+                if 'stim' in player.active_effects and move_result != 'stairs':
+                    v_stim = compute_fov(tiles, px, py, player.fov_radius)
+                    explored |= v_stim
+                    draw(stdscr, tiles, px, py, player, v_stim, explored,
+                         items_on_map, stair_up, stair_down, current_floor,
+                         enemies_on_map, log, terminals=terminals_on_map,
+                         special_rooms=special_rooms, max_floor=site.depth,
+                         theme_override=current_theme, hazards=hazards_on_map,
+                         smoke_tiles=smoke_tiles)
+                    key2 = stdscr.getch()
+                    if key2 in MOVE_KEYS and 'stun' not in player.active_effects:
+                        r2 = _do_move(key2)
+                        if r2 == 'escaped':
+                            return 'escaped'
+
+                e_msgs = enemy_turn(enemies_on_map, tiles, px, py, visible, player,
+                                    smoke_tiles=smoke_tiles, hazards_on_map=hazards_on_map)
                 for em in e_msgs:
                     log.appendleft(em)
+
+                # Tick smoke clouds after each enemy turn
+                for spos in list(smoke_tiles.keys()):
+                    smoke_tiles[spos] -= 1
+                    if smoke_tiles[spos] <= 0:
+                        del smoke_tiles[spos]
 
         visible   = compute_fov(tiles, px, py, player.fov_radius)
         explored |= visible
@@ -3500,14 +3779,14 @@ def run_site(stdscr, site, player):
                  stair_up, stair_down, current_floor, enemies_on_map, log,
                  terminals=terminals_on_map, special_rooms=special_rooms,
                  max_floor=site.depth, theme_override=current_theme,
-                 hazards=hazards_on_map)
+                 hazards=hazards_on_map, smoke_tiles=smoke_tiles)
             return 'dead'
 
         draw(stdscr, tiles, px, py, player, visible, explored, items_on_map,
              stair_up, stair_down, current_floor, enemies_on_map, log,
              terminals=terminals_on_map, special_rooms=special_rooms,
              max_floor=site.depth, theme_override=current_theme,
-             hazards=hazards_on_map)
+             hazards=hazards_on_map, smoke_tiles=smoke_tiles)
 
 
 def show_ship_screen(stdscr, player, sites):
